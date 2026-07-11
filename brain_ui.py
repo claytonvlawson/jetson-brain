@@ -26,6 +26,7 @@ import sys
 import time
 import shutil
 import threading
+import urllib.parse
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,12 @@ class UI:
         if self.plain or not codes:
             return text
         return "".join(codes) + text + self.p.RESET
+
+    def _osc8(self, url, text):
+        """Wrap text in an OSC 8 clickable hyperlink. No-op in plain mode."""
+        if self.plain:
+            return text
+        return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 
     def gradient(self, text, stops=None, bold=False):
         """Spread a truecolor gradient across the characters of `text` (a Nagai
@@ -508,9 +515,10 @@ class Run:
                 self.ui._w("\n   ")
                 self._col = 3
 
-    def sources(self, srcs):
+    def sources(self, srcs, vault_name="ThesisVault"):
         """Print the `sources:` branch under the answer. srcs is a list of
-        strings (vault filenames or urls)."""
+        strings (vault filenames or urls). Vault sources are rendered as
+        clickable OSC 8 hyperlinks that open the note in Obsidian."""
         p, g = self.ui.p, self.ui.g
         self.ui._w("\n")
         if not srcs:
@@ -519,16 +527,22 @@ class Run:
         branch = self.ui.c(g["branch"], p.MUTED_DARK)
         label = self.ui.c("sources:", p.MUTED, p.BOLD)
         self.ui._w("   " + branch + " " + label + "\n")
+        encoded_vault = urllib.parse.quote(vault_name, safe='')
         for s in srcs:
             is_web = str(s).startswith("http")
             dot = self.ui.c(g["dot"], p.MUTED_DARK)
             if is_web:
+                url = str(s)
                 tag = self.ui.c("web:", p.ACCENT_DIM)
+                display = self.ui.c(str(s), p.MUTED)
                 self.ui._w("       " + dot + " " + tag + " "
-                           + self.ui.c(str(s), p.MUTED) + "\n")
+                           + self.ui._osc8(url, display) + "\n")
             else:
+                encoded_file = urllib.parse.quote(str(s), safe='')
+                url = "obsidian://open?vault=" + encoded_vault + "&file=" + encoded_file
+                display = self.ui.c(str(s), p.MUTED)
                 self.ui._w("       " + dot + " "
-                           + self.ui.c(str(s), p.MUTED) + "\n")
+                           + self.ui._osc8(url, display) + "\n")
         self.ui._w("\n")
 
     def finish(self):

@@ -40,6 +40,7 @@ import os
 import json
 import gzip
 import math
+import atexit
 import base64
 import hashlib
 import datetime
@@ -154,15 +155,20 @@ def _sha1(text):
 
 
 def _jaccard(set_a, set_b):
-    """Token-set Jaccard similarity. 0.0 when either side is empty."""
+    """Token-set Jaccard similarity. 0.0 when either side is empty.
+
+    The union size is derived arithmetically (|A u B| = |A| + |B| - |A n B|)
+    instead of materializing set_a | set_b, so each call builds only the
+    intersection. This is an exact integer identity, so the returned ratio is
+    bit-for-bit identical to the old two-set form; on the fuzzy scan it removes
+    one full set construction per candidate entry.
+    """
     if not set_a or not set_b:
         return 0.0
     inter = len(set_a & set_b)
     if inter == 0:
         return 0.0
-    union = len(set_a | set_b)
-    if union == 0:
-        return 0.0
+    union = len(set_a) + len(set_b) - inter
     return inter / float(union)
 
 
@@ -269,12 +275,35 @@ class AnswerCache:
         # normalized-question string -> path, for O(1) exact-match lookups
         # instead of re-hashing every entry on every question.
         self._norm_index = {}
+        # -- fuzzy-scan acceleration (all in-memory only, NEVER serialized) --
+        # A stored entry's content match-set and negation-set are pure functions
+        # of its (immutable) tokens, so we compute them ONCE at index time and
+        # reuse them on every fuzzy lookup instead of rebuilding two sets per
+        # entry per query. path -> frozenset(...).
+        self._match_cache = {}   # path -> frozenset of content words
+        self._neg_cache = {}     # path -> frozenset of negation words
+        # Inverted index: content word -> set of paths whose entry contains it.
+        # A fuzzy query only needs to score entries that share >=1 content word
+        # with it (Jaccard >= FUZZY_THRESHOLD forces intersection >= 1), so this
+        # turns the fuzzy scan from O(all entries) into O(postings of the query's
+        # content words) -- exact narrowing, not approximate.
+        self._inverted = {}      # content word -> set(paths)
+        # Paths whose in-memory hits/last_used have been bumped but not yet
+        # persisted. _register_hit marks dirty instead of rewriting the full
+        # entry JSON on every hit; flushes happen on store/clear/atexit.
+        self._dirty = set()
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
         except Exception:
             # Directory could not be created; operate as an empty cache.
             return
         self._load_all()
+        # Persist any deferred hit bumps on a clean interpreter exit. Guarded so
+        # a registration failure can never break construction.
+        try:
+            atexit.register(self._flush_dirty)
+        except Exception:
+            pass
 
     # -- loading -----------------------------------------------------------
     def _load_all(self):
@@ -299,6 +328,49 @@ class AnswerCache:
                 norm = entry.get("normalized")
                 if norm:
                     self._norm_index[norm] = path
+                # Precompute this entry's fuzzy sets + inverted-index postings.
+                self._index_entry(path, entry)
+
+    def _index_entry(self, path, entry):
+        """Cache an entry's fuzzy match-set / negation-set and add its inverted-
+        index postings. Pure function of the entry's tokens, so it is safe to
+        memoize; idempotent per path. Never raises."""
+        try:
+            toks = entry.get("tokens") or (entry.get("normalized") or "").split()
+            match = frozenset(_match_set(toks))
+            self._match_cache[path] = match
+            self._neg_cache[path] = frozenset(_negations(toks))
+            for word in match:
+                self._inverted.setdefault(word, set()).add(path)
+        except Exception:
+            return
+
+    def _deindex_entry(self, path):
+        """Drop an entry's fuzzy-set caches and inverted-index postings, pruning
+        emptied word buckets. Inverse of _index_entry. Never raises."""
+        try:
+            for word in self._match_cache.pop(path, ()):  # frozenset is iterable
+                bucket = self._inverted.get(word)
+                if bucket is not None:
+                    bucket.discard(path)
+                    if not bucket:
+                        del self._inverted[word]
+            self._neg_cache.pop(path, None)
+        except Exception:
+            return
+
+    def _flush_dirty(self):
+        """Persist entries whose hits/last_used were bumped by a cache hit but
+        not yet written. Skips paths no longer present (evicted/cleared) so a
+        flush can never resurrect a deleted file. Never raises."""
+        try:
+            for path in list(self._dirty):
+                entry = self.entries.get(path)
+                if entry is not None:
+                    self._write_entry(path, entry)
+            self._dirty.clear()
+        except Exception:
+            return
 
     def _read_entry(self, path):
         """Read and lightly validate a single entry file. None on any error."""
@@ -381,20 +453,49 @@ class AnswerCache:
             if len(q_match) < FUZZY_MIN_TOKENS:
                 return None
             q_neg = _negations(q_toks)
+            q_size = len(q_match)
+
+            # Candidate narrowing: only entries that share at least one content
+            # word with the query can reach FUZZY_THRESHOLD, because Jaccard >=
+            # 0.70 forces a non-empty intersection. So we score just the union of
+            # the inverted-index postings for the query's content words rather
+            # than every entry. This is EXACT (zero-overlap entries score 0.0 and
+            # were always discarded), and drops a full-cache scan to a handful of
+            # candidates for a typical short query.
+            candidates = set()
+            for word in q_match:
+                postings = self._inverted.get(word)
+                if postings:
+                    candidates |= postings
 
             best_path = None
             best_entry = None
             best_score = 0.0
-            for path, entry in self.entries.items():
+            for path in candidates:
+                entry = self.entries.get(path)
+                if entry is None:
+                    continue
                 try:
-                    entry_tokens = entry.get("tokens")
-                    if not entry_tokens:
-                        entry_tokens = (entry.get("normalized") or "").split()
-                    entry_match = _match_set(entry_tokens)
-                    if len(entry_match) < FUZZY_MIN_TOKENS:
+                    # Cached content match-set (memoized in _index_entry). Lazy
+                    # backfill covers any entry not yet indexed.
+                    entry_match = self._match_cache.get(path)
+                    if entry_match is None:
+                        self._index_entry(path, entry)
+                        entry_match = self._match_cache.get(path, frozenset())
+                    e_size = len(entry_match)
+                    if e_size < FUZZY_MIN_TOKENS:
+                        continue
+                    # Size-ratio upper bound: the largest Jaccard two content
+                    # sets of sizes (lo, hi) can reach is lo/hi (smaller set
+                    # fully contained in the larger). Using the SAME float
+                    # division and comparison _jaccard uses guarantees we prune
+                    # an entry only when its best-possible score would itself be
+                    # rejected, so no would-pass hit is ever dropped.
+                    lo, hi = (q_size, e_size) if q_size <= e_size else (e_size, q_size)
+                    if lo / float(hi) < FUZZY_THRESHOLD:
                         continue
                     # Opposite intents (differing negations) never match.
-                    if _negations(entry_tokens) != q_neg:
+                    if self._neg_cache.get(path, frozenset()) != q_neg:
                         continue
                     score = _jaccard(q_match, entry_match)
                     if score > best_score:
@@ -411,14 +512,21 @@ class AnswerCache:
             return None
 
     def _register_hit(self, path, entry):
-        """Compound a reused entry: bump hits, refresh recency, persist, and
-        return a shallow copy carrying a decompressed 'answer'. Never raises."""
+        """Compound a reused entry: bump hits, refresh recency, and return a
+        shallow copy carrying a decompressed 'answer'. Never raises.
+
+        The bump is applied to the in-memory entry (which self.entries holds by
+        reference, so eviction/stats/value math see it immediately) and the path
+        is marked dirty; the full-entry JSON rewrite is DEFERRED off this hot
+        read path to the next store()/clear()/atexit flush. The only thing lost
+        on a hard kill before a flush is un-persisted hits/last_used bumps, which
+        feed only eviction ranking and /cache stats -- never answer content."""
         try:
             entry["hits"] = int(entry.get("hits", 0)) + 1
         except Exception:
             entry["hits"] = 1
         entry["last_used"] = _now().isoformat()
-        self._write_entry(path, entry)
+        self._dirty.add(path)
         # Hand the caller a view with plaintext answer, leaving stored form gz.
         view = dict(entry)
         view["answer"] = _entry_answer(entry)
@@ -493,6 +601,15 @@ class AnswerCache:
                 return None
             self.entries[path] = entry
             self._norm_index[normalized] = path
+            # Refresh this path's fuzzy caches + inverted postings (a re-store
+            # under the same key may have changed its tokens).
+            self._deindex_entry(path)
+            self._index_entry(path, entry)
+
+            # A write is already happening here, so flush any deferred hit bumps
+            # first -- unconditionally, so it is not gated by _enforce_budget's
+            # under-budget early return -- keeping _sizes fresh before ranking.
+            self._flush_dirty()
 
             # Optimize storage space on every store: prune the least valuable
             # knowledge until the cache is back under budget.
@@ -555,6 +672,10 @@ class AnswerCache:
                     pass
                 self.entries.pop(path, None)
                 self._sizes.pop(path, None)
+                # Drop the fuzzy caches/inverted postings and any pending dirty
+                # flag so nothing outlives the evicted entry or resurrects it.
+                self._deindex_entry(path)
+                self._dirty.discard(path)
                 # Drop the norm-index entry only if it still points at this path
                 # (a re-store under the same normalized key may have moved it).
                 norm = _entry.get("normalized")
@@ -613,4 +734,8 @@ class AnswerCache:
         self.entries = {}
         self._sizes = {}
         self._norm_index = {}
+        self._match_cache = {}
+        self._neg_cache = {}
+        self._inverted = {}
+        self._dirty = set()
         return removed

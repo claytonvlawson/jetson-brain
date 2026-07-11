@@ -30,6 +30,10 @@ try:
 except Exception:
     AnswerCache = None
 try:
+    from web_cache import persist_web_fetch
+except Exception:
+    persist_web_fetch = None
+try:
     from brain_ui import UI
 except Exception:
     UI = None
@@ -38,6 +42,17 @@ except Exception:
 BRAIN_ROOT = "/mnt/nvme/brain"
 INDEX_PATH = os.path.join(BRAIN_ROOT, "index", "bm25.pkl")
 CACHE_DIR = "/mnt/nvme/brain/cache"
+VAULT_NAME = "ThesisVault"   # Obsidian vault name for clickable source links
+
+# Web-fetch persistence (web_cache.py). Every DuckDuckGo fetch is saved twice:
+# a raw JSON record under WEB_CACHE_DIR for fast dedup/reuse (keyed by url +
+# content hash), and a human-readable, indexable note under WEB_VAULT_DIR.
+# WEB_VAULT_DIR MUST live under the build_index.py vault root
+# (/mnt/nvme/brain/vault) so the next build_index.py run makes these notes
+# BM25-retrievable. WEB_CACHE_DIR is raw-content caching only and is kept in its
+# own cache/web subdir, separate from the AnswerCache Q/A cache under CACHE_DIR.
+WEB_CACHE_DIR = os.path.join(CACHE_DIR, "web")                  # /mnt/nvme/brain/cache/web
+WEB_VAULT_DIR = os.path.join(BRAIN_ROOT, "vault", "_WebCache")  # under vault, indexable
 
 DEFAULT_MODEL = "llama3.2:3b"
 OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -52,7 +67,13 @@ DEEP_MODEL = "qwen2.5:7b"
 
 # Generation options threaded into every Ollama chat call: bounded output +
 # context window and a low temperature for grounded answers.
-GEN_OPTIONS = {"num_predict": 200, "num_ctx": 3072, "temperature": 0.3}
+GEN_OPTIONS = {
+    "num_predict":    512,   # was 200 — full paragraph answers
+    "num_ctx":       4096,   # was 3072 — more room for retrieved chunks
+    "temperature":    0.2,   # tighter citation adherence
+    "repeat_penalty": 1.1,   # prevent looping on long outputs
+    "num_gpu":        999,   # all layers on GPU, no CPU offload
+}
 
 # keep_alive per tier (8GB cannot hold both large models resident): the fast
 # model stays pinned (-1) for warm repeats; the deep 7B loads on demand and is
@@ -63,8 +84,8 @@ KEEP_ALIVE_DEEP = "2m"
 # Retrieval depth per tier: fast stays lean for speed, deep pulls more context
 # for grounding. TOP_K_VAULT is the default depth for the retrieve() helper
 # (a compatibility shim; handle_question does its own tiered retrieval inline).
-TOP_K_FAST = 3
-TOP_K_DEEP = 6
+TOP_K_FAST = 4   # was 3
+TOP_K_DEEP = 8   # was 6
 TOP_K_VAULT = TOP_K_DEEP
 
 # Retrieval section boost: when a query names a top-level vault folder
@@ -78,10 +99,7 @@ WEB_FETCH_TIMEOUT = 8
 PAGE_CHAR_CAP = 2000
 HISTORY_TURNS = 6  # keep the last N user+assistant exchanges
 
-MAX_LINK_EXPAND = 2  # cap on extra chunks pulled in via wikilink expansion.
-# Lowered 4->3->2: each linked chunk is ~230 LLM prefill tokens on the (now single)
-# vault call, and prefill is the dominant per-query cost on this device. Trades a
-# little answer breadth for speed; raise it back toward 4-6 for max completeness.
+MAX_LINK_EXPAND = 3  # was 2 — one extra linked note now that context is 4096
 MAX_DOC_URLS = 6     # cap on reference URLs offered to the model
 
 USER_AGENT = (
@@ -568,6 +586,18 @@ def gather_web_context(query):
             text = (r.get("body") or "").strip()
         if text:
             excerpts.append((href, text))
+    # Persist every DuckDuckGo fetch into the brain: a raw JSON record for
+    # dedup/reuse plus an indexable vault note for the next build_index.py run.
+    # Best-effort and strictly additive: a no-op when nothing was fetched or the
+    # module is unavailable, and any failure is swallowed so answering the
+    # user's question is never affected. These are a handful of small atomic
+    # disk writes on the answer path (a few ms on NVMe); trivial next to the
+    # network fetches above, but not literally free.
+    if excerpts and persist_web_fetch is not None:
+        try:
+            persist_web_fetch(query, excerpts, WEB_CACHE_DIR, WEB_VAULT_DIR)
+        except Exception:
+            pass
     return excerpts
 
 
@@ -996,7 +1026,7 @@ def _finish(run, history, question, answer, sources):
     history.append({"role": "assistant", "content": answer})
     trim_history(history)
     if run is not None:
-        run.sources(sources)
+        run.sources(sources, vault_name=VAULT_NAME)
     return answer, sources
 
 
@@ -1330,7 +1360,7 @@ def main():
         except Exception:
             cache_count = 0
     if ui is not None:
-        ui.welcome(model, len(chunks), cache_count, "ThesisVault", CACHE_DIR)
+        ui.welcome(model, len(chunks), cache_count, VAULT_NAME, CACHE_DIR)
         if cache is None:
             ui.note("[answer cache unavailable, running without it]")
     else:
@@ -1443,7 +1473,7 @@ def main():
                     run.skip(k, "cache hit")
                 sink = run.begin_answer()
                 sink(cached_answer)
-                run.sources(hit.get("sources") or [])
+                run.sources(hit.get("sources") or [], vault_name=VAULT_NAME)
                 history.append({"role": "user", "content": question})
                 history.append({"role": "assistant", "content": cached_answer})
                 trim_history(history)
