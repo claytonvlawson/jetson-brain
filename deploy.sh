@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py build_index.py install.sh requirements.txt jetson-online.sh jetson-online.service; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py install.sh requirements.txt jetson-online.sh jetson-online.service; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -76,6 +76,7 @@ scp -q \
   "${HERE}/brain.py" \
   "${HERE}/brain_ui.py" \
   "${HERE}/answer_cache.py" \
+  "${HERE}/web_cache.py" \
   "${HERE}/build_index.py" \
   "${HERE}/install.sh" \
   "${HERE}/requirements.txt" \

@@ -40,7 +40,7 @@ show_menu(){
   echo "    ${gr}3${r})  NCDD NBA draft lab"
   echo "    ${gr}4${r})  Internet status / connectivity check"
   echo "    ${gr}5${r})  System status ${dm}(GPU, memory, power, disk)${r}"
-  echo "    ${gr}6${r})  Enable MAX performance (Super mode)  ${dm}[sudo]${r}"
+  echo "    ${gr}6${r})  Super Saiyan Mode (SSJ mode)  ${dm}[sudo]${r}"
   echo "    ${gr}7${r})  Rebuild the vault index"
   echo "    ${gr}8${r})  Open the README"
   echo "    ${gr}q${r})  Quit to shell   ${dm}(type 'menu' to reopen)${r}"
@@ -92,7 +92,7 @@ main(){
       3) ncdd_lab; pause ;;
       4) "$BRAIN_ROOT/jetson-online.sh" test 2>/dev/null || echo "connectivity script not found"; pause ;;
       5) system_status; pause ;;
-      6) echo "Switching to MAX (Super) mode. sudo may prompt for your password."
+      6) echo "Going Super Saiyan. sudo may prompt for your password."
          sudo nvpmodel -m 2 && sudo jetson_clocks && echo "Now:" && nvpmodel -q 2>/dev/null | grep -i 'power mode'
          pause ;;
       7) python3 "$BRAIN_ROOT/build_index.py"; pause ;;
