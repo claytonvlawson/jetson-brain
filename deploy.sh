@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py install.sh requirements.txt jetson-online.sh jetson-online.service; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py install.sh requirements.txt jetson-online.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -82,11 +82,16 @@ scp -q \
   "${HERE}/requirements.txt" \
   "${HERE}/jetson-online.sh" \
   "${HERE}/jetson-online.service" \
+  "${HERE}/asl_server.py" \
+  "${HERE}/asl_sign_model.py" \
+  "${HERE}/asl_webcam.py" \
+  "${HERE}/asl-mac.sh" \
+  "${HERE}/jetson-menu.sh" \
   "${JETSON}:${REMOTE}/"
 
 # ---- Make scripts executable and install --------------------------------
 echo "==> Marking scripts executable and running install.sh on the Jetson ..."
-ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' && bash '${REMOTE}/install.sh'"
+ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '${REMOTE}/asl-mac.sh' '${REMOTE}/jetson-menu.sh' && bash '${REMOTE}/install.sh'"
 
 # ---- Done ---------------------------------------------------------------
 cat <<EOF
