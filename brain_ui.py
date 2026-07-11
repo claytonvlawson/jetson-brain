@@ -40,9 +40,6 @@ class Palette:
 
     # Orange gradient stops (r,g,b): deep orange -> amber -> gold.
     SUNSET = [(229, 103, 10), (255, 140, 0), (255, 185, 50)]
-    # Full range: deep orange bleeding into bright amber.
-    SUNSET_SKY = [(229, 103, 10), (255, 120, 20), (255, 140, 0),
-                  (255, 185, 50), (255, 160, 30)]
 
     def __init__(self, truecolor):
         self.truecolor = truecolor
@@ -88,11 +85,9 @@ BOX_U = {"tl": "╭", "tr": "╮", "bl": "╰", "br": "╯",
 BOX_A = {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|"}
 
 GLYPH_U = {"bullet": "⏺", "branch": "⎿", "ok": "✔",
-           "fail": "✗", "skip": "⊘", "dot": "·",
-           "star": "✻", "caret": ">", "cursor": "▮"}
+           "fail": "✗", "skip": "⊘", "dot": "·", "caret": ">"}
 GLYPH_A = {"bullet": "*", "branch": "+-", "ok": "[ok]", "fail": "[x]",
-           "skip": "[skip]", "dot": "-", "star": "*", "caret": ">",
-           "cursor": "_"}
+           "skip": "[skip]", "dot": "-", "caret": ">"}
 
 
 def _supports_truecolor():
@@ -232,7 +227,6 @@ class UI:
         left_inner = 36
         right_inner = 34
         total_inner = left_inner + right_inner + 3  # 3 for " | " separator
-        star = self.g["star"]
 
         # Render a pixel-art robot head in the Claude Code orange style.
         robot = [
@@ -243,91 +237,65 @@ class UI:
         ]
 
         def lpad(s, width):
-            """Pad a plain string on the right to `width` chars."""
-            pad = width - len(s)
+            """Pad on the right to `width` VISIBLE chars: ANSI escape codes do
+            not count, so colored and plain rows land on the same column."""
+            pad = width - len(_ANSI_RE.sub("", s))
             return s + (" " * max(0, pad))
 
-        # Left column content (plain + colored pairs).
-        left_lines_p = []
-        left_lines_c = []
-
-        left_lines_p.append(lpad("", left_inner))
-        left_lines_c.append(lpad("", left_inner))
-
-        greeting_p = "  Welcome back, Clayton!"
-        greeting_c = "  " + self.c("Welcome back, Clayton!", p.ACCENT, p.BOLD)
-        left_lines_p.append(lpad(greeting_p, left_inner))
-        left_lines_c.append(lpad(greeting_c, left_inner))
-
-        left_lines_p.append(lpad("", left_inner))
-        left_lines_c.append(lpad("", left_inner))
-
+        # Left column content.
+        left_lines = [lpad("", left_inner)]
+        left_lines.append(lpad(
+            "  " + self.c("Welcome back, Clayton!", p.ACCENT, p.BOLD),
+            left_inner))
+        left_lines.append(lpad("", left_inner))
         for rline in robot:
-            rp = lpad(rline, left_inner)
-            rc = lpad(self.c(rline, p.ACCENT), left_inner)
-            left_lines_p.append(rp)
-            left_lines_c.append(rc)
+            left_lines.append(lpad(self.c(rline, p.ACCENT), left_inner))
+        left_lines.append(lpad("", left_inner))
 
-        left_lines_p.append(lpad("", left_inner))
-        left_lines_c.append(lpad("", left_inner))
-
-        def info_row(label, value, tail="", value_color=None):
-            vc = value_color or p.ACCENT
-            plain = "  %-7s %s" % (label + ":", value)
-            colored = "  " + self.c("%-7s" % (label + ":"), p.MUTED) + " " + self.c(value, vc)
+        def info_row(label, value, tail=""):
+            colored = ("  " + self.c("%-7s" % (label + ":"), p.MUTED)
+                       + " " + self.c(value, p.ACCENT))
             if tail:
-                plain += " " + tail
                 colored += " " + self.c(tail, p.MUTED_DARK)
-            left_lines_p.append(lpad(plain, left_inner))
-            left_lines_c.append(lpad(colored, left_inner))
+            left_lines.append(lpad(colored, left_inner))
 
         info_row("model", _short_model(model), "(Ollama)")
         info_row("vault", vault_name, "%s chunks" % _commas(chunk_count))
         info_row("cache", "%d entries" % cache_entries)
         info_row("host", "localhost:11434")
 
-        left_lines_p.append(lpad("", left_inner))
-        left_lines_c.append(lpad("", left_inner))
+        left_lines.append(lpad("", left_inner))
 
         # Right column: tips, matching Claude Code's "Tips for getting started" panel.
-        right_lines_p = []
-        right_lines_c = []
-
-        tips_header_p = " Tips for getting started"
-        tips_header_c = " " + self.c("Tips for getting started", p.ACCENT, p.BOLD)
-        right_lines_p.append(lpad(tips_header_p, right_inner))
-        right_lines_c.append(lpad(tips_header_c, right_inner))
-
-        right_lines_p.append(lpad("", right_inner))
-        right_lines_c.append(lpad("", right_inner))
+        right_lines = [lpad(
+            " " + self.c("Tips for getting started", p.ACCENT, p.BOLD),
+            right_inner)]
+        right_lines.append(lpad("", right_inner))
 
         tips = [
             "Ask a question; brain retrieves",
-            "  from the vault before answering.",
+            "  from the vault, then answers.",
             "",
             "/web on|off  toggles DuckDuckGo",
             "  web fallback.",
             "",
-            "/model  switches the Ollama model.",
+            "/model  picks the Ollama model.",
             "/cache  inspects the answer bank.",
             "",
             "Ctrl-C  interrupts a run.",
             "Ctrl-D or /exit  quits.",
         ]
         for tip in tips:
-            right_lines_p.append(lpad(" " + tip, right_inner))
-            right_lines_c.append(lpad(" " + self.c(tip, p.MUTED), right_inner))
+            right_lines.append(lpad(" " + self.c(tip, p.MUTED), right_inner))
 
         # Right column: "What's new" section.
-        right_lines_p.append(lpad("", right_inner))
-        right_lines_c.append(lpad("", right_inner))
-        right_lines_p.append(lpad(" What's new", right_inner))
-        right_lines_c.append(lpad(" " + self.c("What's new", p.ACCENT, p.BOLD), right_inner))
-        right_lines_p.append(lpad("", right_inner))
-        right_lines_c.append(lpad("", right_inner))
+        right_lines.append(lpad("", right_inner))
+        right_lines.append(lpad(
+            " " + self.c("What's new", p.ACCENT, p.BOLD), right_inner))
+        right_lines.append(lpad("", right_inner))
         whatsnew = [
             "Two-tier models: /deep <q> uses",
-            "  qwen2.5:7b for harder questions.",
+            "  qwen2.5:7b on hard questions.",
             "",
             "Wikilink graph expansion pulls",
             "  linked notes into context.",
@@ -336,34 +304,24 @@ class UI:
             "  repeat answers.",
         ]
         for line in whatsnew:
-            right_lines_p.append(lpad(" " + line, right_inner))
-            right_lines_c.append(lpad(" " + self.c(line, p.MUTED), right_inner))
+            right_lines.append(lpad(" " + self.c(line, p.MUTED), right_inner))
 
         # Pad columns to the same height.
-        while len(left_lines_p) < len(right_lines_p):
-            left_lines_p.append(lpad("", left_inner))
-            left_lines_c.append(lpad("", left_inner))
-        while len(right_lines_p) < len(left_lines_p):
-            right_lines_p.append(lpad("", right_inner))
-            right_lines_c.append(lpad("", right_inner))
+        while len(left_lines) < len(right_lines):
+            left_lines.append(lpad("", left_inner))
+        while len(right_lines) < len(left_lines):
+            right_lines.append(lpad("", right_inner))
 
         # Orange dashed outer border (Claude Code style).
         h_dash = (box["h"] * total_inner) if self.unicode else ("-" * total_inner)
         top = " " + self.c(box["tl"] + h_dash + box["tr"], p.ACCENT)
         bot = " " + self.c(box["bl"] + h_dash + box["br"], p.ACCENT)
         # Inner vertical divider between left and right panels.
-        div_p = self.c(box["v"], p.ACCENT_DIM)
-        div_right_p = self.c(box["v"], p.ACCENT_DIM)
+        div = self.c(box["v"], p.ACCENT_DIM)
 
         lines = [top]
-        for i in range(len(left_lines_p)):
-            lp = left_lines_p[i]
-            rp = right_lines_p[i]
-            lc = left_lines_c[i]
-            rc = right_lines_c[i]
-            lines.append(
-                " " + div_p + lc + " " + div_p + " " + rc + div_right_p
-            )
+        for lc, rc in zip(left_lines, right_lines):
+            lines.append(" " + div + lc + " " + div + " " + rc + div)
         lines.append(bot)
         self._w("\n".join(lines) + "\n\n")
 
@@ -412,9 +370,6 @@ class UI:
     # -- simple messages --------------------------------------------------
     def note(self, text):
         self._w(" " + self.c(text, self.p.MUTED) + "\n")
-
-    def error(self, text):
-        self._w(" " + self.c(text, self.p.ERROR) + "\n")
 
 
 class Run:
@@ -476,11 +431,6 @@ class Run:
         if self.ui.plain and s:
             self.ui._w("  [x] %s%s\n" % (s.label, (" - " + detail) if detail else ""))
 
-    def live(self, text):
-        """Update the token shown beside the in-flight spinner (e.g. tok count)."""
-        with self.lock:
-            self._detail_live = text
-
     # -- streaming answer -------------------------------------------------
     def begin_answer(self):
         """Freeze the tree, print it once statically, and open the answer
@@ -489,7 +439,7 @@ class Run:
         if self._thread is not None:
             self._thread.join(timeout=1.0)
         if not self.ui.plain:
-            self._redraw(final=True)
+            self._redraw()
             self.ui._w("\x1b[?25h")  # restore cursor
         self._streaming = True
         self._col = 0
@@ -558,10 +508,10 @@ class Run:
         while not self._stop.is_set():
             with self.lock:
                 self._frame = (self._frame + 1) % len(SPIN_FRAMES)
-                self._redraw(final=False)
+                self._redraw()
             time.sleep(SPIN_INTERVAL)
 
-    def _redraw(self, final=False):
+    def _redraw(self):
         """Compose and print the tree, rewinding over the previous draw."""
         lines = self._compose()
         # Truncate to the terminal width so no status line wraps. A wrapped line

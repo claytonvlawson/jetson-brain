@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py install.sh requirements.txt jetson-online.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py prime_cache.py eval_brain.py gold_questions.jsonl install.sh requirements.txt jetson-online.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -55,6 +55,7 @@ ssh "${JETSON}" "mkdir -p '${REMOTE}/vault' '${REMOTE}/index'"
 # ---- Sync the vault (markdown only) -------------------------------------
 echo "==> Syncing vault markdown (md only) to ${REMOTE}/vault/ ..."
 rsync -az --delete --prune-empty-dirs \
+  --exclude='_WebCache/' \
   --include='*/' --include='*.md' --exclude='*' \
   "${VAULT_SRC}/" "${JETSON}:${REMOTE}/vault/"
 
@@ -78,6 +79,9 @@ scp -q \
   "${HERE}/answer_cache.py" \
   "${HERE}/web_cache.py" \
   "${HERE}/build_index.py" \
+  "${HERE}/prime_cache.py" \
+  "${HERE}/eval_brain.py" \
+  "${HERE}/gold_questions.jsonl" \
   "${HERE}/install.sh" \
   "${HERE}/requirements.txt" \
   "${HERE}/jetson-online.sh" \

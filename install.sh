@@ -37,7 +37,7 @@ if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
   python3 -m pip install --user -r "${SCRIPT_DIR}/requirements.txt"
 else
   echo "WARN: requirements.txt not found next to install.sh; installing named deps directly."
-  python3 -m pip install --user ollama rank_bm25 ddgs beautifulsoup4 markdown requests
+  python3 -m pip install --user ollama rank_bm25 ddgs beautifulsoup4 requests
 fi
 
 echo "==> Ensuring MediaPipe is installed for ASL sign detection ..."
@@ -57,8 +57,12 @@ if [ -f "${HAND_MODEL}" ]; then
   echo "hand_landmarker.task already present at ${HAND_MODEL}."
 else
   echo "Downloading hand_landmarker.task to ${HAND_MODEL} ..."
-  curl -sSL "${HAND_MODEL_URL}" -o "${HAND_MODEL}"
-  echo "Downloaded hand_landmarker.task."
+  if curl -fsSL "${HAND_MODEL_URL}" -o "${HAND_MODEL}"; then
+    echo "Downloaded hand_landmarker.task."
+  else
+    rm -f "${HAND_MODEL}"
+    echo "WARN: hand model download failed; ASL detection will need it later."
+  fi
 fi
 
 echo "==> Ensuring install directories exist (no sudo; snowbeach owns /mnt/nvme) ..."
@@ -78,7 +82,16 @@ echo "==> Installing launcher at ${LAUNCHER} ..."
 mkdir -p "${BIN_DIR}"
 cat > "${LAUNCHER}" <<'EOF'
 #!/usr/bin/env bash
-exec python3 /mnt/nvme/brain/brain.py "$@"
+# brain launcher: run the local RAG agent inside a persistent tmux session
+# named "brain" so a laptop and an iPhone attach to the SAME live chat.
+# Detach with Ctrl-b then d; the session (and any running answer) keeps going.
+# Falls back to a direct run if tmux is not installed yet.
+BRAIN_PY="/mnt/nvme/brain/brain.py"
+if command -v tmux >/dev/null 2>&1; then
+  exec tmux new-session -A -s brain "python3 $BRAIN_PY $*"
+else
+  exec python3 "$BRAIN_PY" "$@"
+fi
 EOF
 chmod +x "${LAUNCHER}"
 

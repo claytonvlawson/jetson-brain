@@ -81,12 +81,16 @@ GEN_OPTIONS = {
 KEEP_ALIVE_FAST = -1
 KEEP_ALIVE_DEEP = "2m"
 
+
+def _keep_alive(model):
+    """keep_alive for a chat call: the deep model is released after use, every
+    other model stays pinned (single source of truth for all four call sites)."""
+    return KEEP_ALIVE_DEEP if model == DEEP_MODEL else KEEP_ALIVE_FAST
+
 # Retrieval depth per tier: fast stays lean for speed, deep pulls more context
-# for grounding. TOP_K_VAULT is the default depth for the retrieve() helper
-# (a compatibility shim; handle_question does its own tiered retrieval inline).
+# for grounding. handle_question does its own tiered retrieval inline.
 TOP_K_FAST = 4   # was 3
 TOP_K_DEEP = 8   # was 6
-TOP_K_VAULT = TOP_K_DEEP
 
 # Retrieval section boost: when a query names a top-level vault folder
 # (e.g. "CRPD"), add this to the BM25 score of chunks in that folder so
@@ -355,13 +359,16 @@ def _build_meta(data, chunks):
     }
 
 
+# Folder-name token sets are memoized: the vault has a handful of top-level
+# folders but _apply_section_boost runs per chunk per question on the CPU.
+_FOLDER_TOKENS = {}
+
+
 def _apply_section_boost(scores, chunks, qtok):
     """Add FOLDER_BOOST to any chunk whose top-level vault folder is named
     in the query tokens, so canonical primary notes (e.g. CRPD/Article 2
     Definitions) are not buried under dense secondary notes. Returns scores
-    unchanged when the query names no folder. Shared by retrieve() and
-    handle_question so the ranking the model sees matches what any inspector
-    or measurement sees."""
+    unchanged when the query names no folder."""
     if not len(scores):
         return scores
     qset = set(qtok)
@@ -369,32 +376,17 @@ def _apply_section_boost(scores, chunks, qtok):
     for i, c in enumerate(chunks):
         src = str(c.get("source") or "")
         top = src.split("/", 1)[0] if "/" in src else ""
-        if top and (set(tokenize(top)) & qset):
+        if not top:
+            continue
+        ftok = _FOLDER_TOKENS.get(top)
+        if ftok is None:
+            ftok = set(tokenize(top))
+            _FOLDER_TOKENS[top] = ftok
+        if ftok & qset:
             if boosted is None:
                 boosted = list(scores)
             boosted[i] += FOLDER_BOOST
     return boosted if boosted is not None else scores
-
-
-def retrieve(bm25, chunks, query, k=TOP_K_VAULT):
-    """Return up to k top-scoring chunks for the query. Never raises.
-
-    Kept for compatibility. handle_question computes scores directly so it can
-    reuse them for wikilink expansion, but this helper is still valid.
-    """
-    qtok = query_tokens(query)
-    try:
-        scores = bm25.get_scores(qtok)
-    except Exception:
-        return []
-    scores = _apply_section_boost(scores, chunks, qtok)
-    ranked = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)
-    out = []
-    for i in ranked[:k]:
-        if scores[i] <= 0:
-            continue
-        out.append(chunks[i])
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +432,7 @@ def chat_once(model, messages):
     with '[error]' so callers can detect failure without a crash."""
     try:
         import ollama
-        _ka = KEEP_ALIVE_DEEP if model == DEEP_MODEL else KEEP_ALIVE_FAST
+        _ka = _keep_alive(model)
         resp = ollama.chat(model=model, messages=messages, stream=False, options=GEN_OPTIONS, keep_alive=_ka)
         msg = resp.get("message") if isinstance(resp, dict) else getattr(resp, "message", None)
         if isinstance(msg, dict):
@@ -456,7 +448,7 @@ def chat_once(model, messages):
         import requests
         resp = requests.post(
             OLLAMA_HOST + "/api/chat",
-            json={"model": model, "messages": messages, "stream": False, "options": GEN_OPTIONS, "keep_alive": (KEEP_ALIVE_DEEP if model == DEEP_MODEL else KEEP_ALIVE_FAST)},
+            json={"model": model, "messages": messages, "stream": False, "options": GEN_OPTIONS, "keep_alive": _keep_alive(model)},
             timeout=120,
         )
         resp.raise_for_status()
@@ -484,7 +476,7 @@ def chat_stream(model, messages, sink=None):
 
     try:
         import ollama
-        _ka = KEEP_ALIVE_DEEP if model == DEEP_MODEL else KEEP_ALIVE_FAST
+        _ka = _keep_alive(model)
         for part in ollama.chat(model=model, messages=messages, stream=True, options=GEN_OPTIONS, keep_alive=_ka):
             piece = ""
             msg = part.get("message") if isinstance(part, dict) else getattr(part, "message", None)
@@ -499,15 +491,20 @@ def chat_stream(model, messages, sink=None):
             print()
         return "".join(collected)
     except Exception:
-        pass
+        # A mid-stream failure already emitted tokens; retrying over REST would
+        # regenerate from scratch and duplicate them in the sink, the history,
+        # and the cache. Keep the partial answer instead.
+        if collected:
+            _emit("\n[stream interrupted; the answer may be incomplete]")
+            return "".join(collected)
 
-    # REST streaming fallback.
+    # REST streaming fallback (only reached when nothing was emitted).
     try:
         import json
         import requests
         with requests.post(
             OLLAMA_HOST + "/api/chat",
-            json={"model": model, "messages": messages, "stream": True, "options": GEN_OPTIONS, "keep_alive": (KEEP_ALIVE_DEEP if model == DEEP_MODEL else KEEP_ALIVE_FAST)},
+            json={"model": model, "messages": messages, "stream": True, "options": GEN_OPTIONS, "keep_alive": _keep_alive(model)},
             stream=True,
             timeout=120,
         ) as resp:
@@ -604,36 +601,10 @@ def gather_web_context(query):
 # ---------------------------------------------------------------------------
 # Prompt construction.
 # ---------------------------------------------------------------------------
-FIRST_PASS_SYSTEM = (
-    "You are a careful research assistant grounded in a local thesis vault. "
-    "You are given retrieved snippets from the vault, each labeled with its "
-    "source filename. Some snippets may be labeled '(linked)' because they come "
-    "from notes that the top notes link to. You may also be given a list of "
-    "reference links found in those notes.\n"
-    "First try to answer from the vault context and cite the sources by "
-    "filename when you use them.\n"
-    "If the vault context is not enough, YOU decide how to reach the web and "
-    "reply with EXACTLY ONE line and nothing else, choosing between:\n"
-    "- 'FETCH: <url>' when the answer lives on ONE specific web page: the "
-    "question names or clearly implies a particular website, document, paper, "
-    "or organization, or one of the reference links above is the right source. "
-    "Give the single most relevant full URL (it does not have to be one of the "
-    "reference links; use any specific URL you are confident points at the "
-    "answer).\n"
-    "- 'SEARCH: <query>' when no single page is obvious and you need to discover "
-    "sources, compare several results, or get current or general information. "
-    "Give a good web search query.\n"
-    "Rule of thumb: FETCH only when you are confident of the exact page (a "
-    "reference link above or a well known stable URL); SEARCH for anything "
-    "current or time sensitive (weather, prices, latest news, recent events) or "
-    "whenever you are not sure the exact URL exists. When you go to the web, "
-    "output only that one FETCH or SEARCH line with no other text."
-)
-
-# Slim routing prompt for Phase 2 (Q1). Unlike FIRST_PASS_SYSTEM it does NOT
-# reference vault snippets, because the routing call no longer receives them:
-# Phase 1 already judged the vault insufficient. It only needs the question and
-# any reference URLs to pick FETCH vs SEARCH.
+# Slim routing prompt for Phase 2 (Q1). It does NOT reference vault snippets,
+# because the routing call never receives them: Phase 1 already judged the
+# vault insufficient. It only needs the question and any reference URLs to
+# pick FETCH vs SEARCH.
 ROUTE_SYSTEM = (
     "The user's question could not be answered from a local thesis vault, so "
     "you must reach the web. You are given the question and possibly a list of "
@@ -804,10 +775,8 @@ def format_web_context(excerpts):
     return "\n\n".join(blocks)
 
 
-def build_first_pass_user(question, chunks, urls=None, linked_ids=None):
+def build_first_pass_user(question, chunks, linked_ids=None):
     parts = ["Vault context:\n" + format_vault_context(chunks, linked_ids)]
-    if urls:
-        parts.append("Reference links found in these notes:\n" + "\n".join(urls))
     parts.append("Question: " + question)
     return "\n\n".join(parts)
 
@@ -829,33 +798,6 @@ def normalize_url(raw):
     if not re.search(r"[a-z0-9][a-z0-9\-]*\.[a-z]{2,}", url, re.IGNORECASE):
         return ""
     return url
-
-
-def answer_from_web(model, query, question, history):
-    """Search the web for query, fetch the top pages, and stream an answer to
-    the original question. Returns (answer, urls), or (None, []) when there
-    were no usable results so the caller can fall back."""
-    excerpts = gather_web_context(query)
-    if not excerpts:
-        return None, []
-    web_messages = [{"role": "system", "content": WEB_SYSTEM}]
-    web_messages.extend(history)
-    web_messages.append(
-        {
-            "role": "user",
-            "content": (
-                "Web excerpts:\n"
-                + format_web_context(excerpts)
-                + "\n\nQuestion: "
-                + question
-            ),
-        }
-    )
-    answer = chat_stream(model, web_messages)
-    urls = [u for u, _ in excerpts]
-    if urls:
-        print("sources: " + ", ".join(urls))
-    return answer, urls
 
 
 def vault_sources(chunks):
@@ -1025,9 +967,34 @@ def _finish(run, history, question, answer, sources):
     history.append({"role": "user", "content": question})
     history.append({"role": "assistant", "content": answer})
     trim_history(history)
-    if run is not None:
-        run.sources(sources, vault_name=VAULT_NAME)
+    run.sources(sources, vault_name=VAULT_NAME)
     return answer, sources
+
+
+def _answer_no_web(model, question, context_chunks, linked_ids, history, run):
+    """Best-effort vault answer for every no-web path (web off, no usable web
+    results, direct fetch failed)."""
+    messages = [{"role": "system", "content": NO_WEB_SYSTEM}]
+    messages.extend(history)
+    messages.append(
+        {"role": "user", "content": build_first_pass_user(
+            question, context_chunks, linked_ids)}
+    )
+    answer = chat_stream(model, messages, sink=run.begin_answer())
+    return _finish(run, history, question, answer, vault_sources(context_chunks))
+
+
+def _answer_from_excerpts(model, question, excerpts, history, run):
+    """Answer from fetched web excerpts and cite their URLs."""
+    messages = [{"role": "system", "content": WEB_SYSTEM}]
+    messages.extend(history)
+    messages.append(
+        {"role": "user", "content": (
+            "Web excerpts:\n" + format_web_context(excerpts)
+            + "\n\nQuestion: " + question)}
+    )
+    answer = chat_stream(model, messages, sink=run.begin_answer())
+    return _finish(run, history, question, answer, [u for u, _ in excerpts])
 
 
 def handle_question(model, question, history, bm25, chunks, meta, web_enabled, run):
@@ -1087,15 +1054,14 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     vault_messages.extend(history)
     vault_messages.append(
         {"role": "user", "content": build_first_pass_user(
-            question, context_chunks, None, linked_ids)}
+            question, context_chunks, linked_ids)}
     )
     first = chat_once(model, vault_messages).strip()
 
     if first.startswith("[error]"):
         run.fail("model", first[:80])
         run.skip("web")
-        if run is not None:
-            run.finish()
+        run.finish()
         return "", []
 
     vault_ok = bool(context_chunks) and not _is_insufficient(first)
@@ -1108,7 +1074,7 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
             first, format_vault_context(context_chunks, linked_ids))
         if _flags:
             first = first.rstrip() + (
-                "\n\n[grounding check \u2014 not found in the retrieved "
+                "\n\n[grounding check - not found in the retrieved "
                 "vault sources, treat as unverified: "
                 + ", ".join(_flags) + "]")
         sink = run.begin_answer()
@@ -1120,15 +1086,8 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     if not web_enabled:
         run.done("model", "vault insufficient")
         run.skip("web", "web search is off")
-        nw_messages = [{"role": "system", "content": NO_WEB_SYSTEM}]
-        nw_messages.extend(history)
-        nw_messages.append(
-            {"role": "user", "content": build_first_pass_user(
-                question, context_chunks, None, linked_ids)}
-        )
-        answer = chat_stream(model, nw_messages, sink=run.begin_answer())
-        return _finish(run, history, question, answer,
-                       vault_sources(context_chunks))
+        return _answer_no_web(model, question, context_chunks, linked_ids,
+                              history, run)
 
     # === PHASE 2: web routing (only because the vault was insufficient) ===
     # Q1: the routing call does NOT re-send the vault context. Phase 1 already
@@ -1150,7 +1109,6 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     # Anything that is not an explicit FETCH becomes a web SEARCH.
     first = route if wants_fetch or route.startswith("SEARCH:") \
         else ("SEARCH: " + question)
-    wants_search = not wants_fetch
     run.done("model", "vault insufficient · going to web")
 
     # Case F: model asked to fetch one specific reference page.
@@ -1168,80 +1126,30 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
                         "Reference page (" + url + "):\n" + text
                         + "\n\nQuestion: " + question)}
                 )
-                run.done("model")
                 answer = chat_stream(model, doc_messages, sink=run.begin_answer())
                 return _finish(run, history, question, answer, [url])
-        # Direct fetch failed: fall back to a web search before the vault.
-        if web_enabled:
-            run.running("web", "direct fetch failed, searching")
-            excerpts = gather_web_context(question)
-            if excerpts:
-                run.done("web", "DuckDuckGo · %d results" % len(excerpts))
-                web_messages = [{"role": "system", "content": WEB_SYSTEM}]
-                web_messages.extend(history)
-                web_messages.append(
-                    {"role": "user", "content": (
-                        "Web excerpts:\n" + format_web_context(excerpts)
-                        + "\n\nQuestion: " + question)}
-                )
-                run.done("model")
-                answer = chat_stream(model, web_messages, sink=run.begin_answer())
-                return _finish(run, history, question, answer,
-                               [u for u, _ in excerpts])
-            run.skip("web", "no usable web results")
-        # No web result either: answer from the vault.
-        run.done("model")
-        fb_messages = [{"role": "system", "content": NO_WEB_SYSTEM}]
-        fb_messages.extend(history)
-        fb_messages.append(
-            {"role": "user", "content": build_first_pass_user(
-                question, context_chunks, None, linked_ids)}
-        )
-        answer = chat_stream(model, fb_messages, sink=run.begin_answer())
-        return _finish(run, history, question, answer, vault_sources(context_chunks))
+        # Direct fetch failed: fall back to a web search, then the vault.
+        run.running("web", "direct fetch failed, searching")
+        excerpts = gather_web_context(question)
+        if excerpts:
+            run.done("web", "DuckDuckGo · %d results" % len(excerpts))
+            return _answer_from_excerpts(model, question, excerpts,
+                                         history, run)
+        run.skip("web", "no usable web results")
+        return _answer_no_web(model, question, context_chunks, linked_ids,
+                              history, run)
 
-    # Case A: model wants to search and web is on.
-    if wants_search and web_enabled:
-        query = first[len("SEARCH:"):].strip() or question
-        run.running("web", "searching: " + query[:40])
-        excerpts = gather_web_context(query)
-        if not excerpts:
-            run.skip("web", "no usable web results")
-            run.done("model")
-            fallback_messages = [{"role": "system", "content": NO_WEB_SYSTEM}]
-            fallback_messages.extend(history)
-            fallback_messages.append(
-                {"role": "user", "content": build_first_pass_user(
-                    question, context_chunks, None, linked_ids)}
-            )
-            answer = chat_stream(model, fallback_messages, sink=run.begin_answer())
-            return _finish(run, history, question, answer,
-                           vault_sources(context_chunks))
-        run.done("web", "DuckDuckGo · %d results" % len(excerpts))
-        web_messages = [{"role": "system", "content": WEB_SYSTEM}]
-        web_messages.extend(history)
-        web_messages.append(
-            {"role": "user", "content": (
-                "Web excerpts:\n" + format_web_context(excerpts)
-                + "\n\nQuestion: " + question)}
-        )
-        run.done("model")
-        answer = chat_stream(model, web_messages, sink=run.begin_answer())
-        return _finish(run, history, question, answer, [u for u, _ in excerpts])
-
-    # Safety net: phase 2 always yields a FETCH or SEARCH handled above, so this
-    # is normally unreachable. If we ever get here, answer from the vault context
-    # rather than dropping the question.
-    run.done("model")
-    run.skip("web", "no web route")
-    fb_messages = [{"role": "system", "content": NO_WEB_SYSTEM}]
-    fb_messages.extend(history)
-    fb_messages.append(
-        {"role": "user", "content": build_first_pass_user(
-            question, context_chunks, None, linked_ids)}
-    )
-    answer = chat_stream(model, fb_messages, sink=run.begin_answer())
-    return _finish(run, history, question, answer, vault_sources(context_chunks))
+    # Case A: the model chose SEARCH (every non-FETCH route; web is on, since
+    # the web-off case already returned above).
+    query = first[len("SEARCH:"):].strip() or question
+    run.running("web", "searching: " + query[:40])
+    excerpts = gather_web_context(query)
+    if not excerpts:
+        run.skip("web", "no usable web results")
+        return _answer_no_web(model, question, context_chunks, linked_ids,
+                              history, run)
+    run.done("web", "DuckDuckGo · %d results" % len(excerpts))
+    return _answer_from_excerpts(model, question, excerpts, history, run)
 
 
 # ---------------------------------------------------------------------------
@@ -1317,7 +1225,7 @@ class _NullRun:
         sys.stdout.write("\n")
         return self._emit
 
-    def sources(self, srcs):
+    def sources(self, srcs, vault_name=None):
         if srcs:
             sys.stdout.write(
                 "\nsources: " + ", ".join(str(s) for s in srcs) + "\n")
@@ -1468,7 +1376,7 @@ def main():
             if hit:
                 cached_answer = hit.get("answer", "") or ""
                 age = str(hit.get("created", "?"))
-                run.done("cache", "hit — served from cache (saved " + age + ")")
+                run.done("cache", "hit · served from cache (saved " + age + ")")
                 for k in ("bm25", "expand", "model", "web"):
                     run.skip(k, "cache hit")
                 sink = run.begin_answer()
@@ -1479,27 +1387,25 @@ def main():
                 trim_history(history)
                 run.finish()
                 continue
-            run.done("cache", "miss — computing fresh")
-        elif run is not None:
-            run.skip("cache", "cache disabled")
+            run.done("cache", "miss · computing fresh")
+        else:
+            run.skip("cache", "bypassed for /deep" if deep_once
+                     else "cache disabled")
 
         try:
             answer, sources = handle_question(
                 q_model, question, history, bm25, chunks, meta, web_enabled, run
             )
         except KeyboardInterrupt:
-            if run is not None:
-                run.finish()
+            run.finish()
             print("\n[interrupted, back to the prompt]")
             continue
         except Exception as exc:
-            if run is not None:
-                run.finish()
+            run.finish()
             print("[something went wrong handling that: " + str(exc) + "]")
             continue
 
-        if run is not None:
-            run.finish()
+        run.finish()
 
         # Store fresh answers in the cache (triggers the storage-optimization
         # pass and compounds the knowledge bank).

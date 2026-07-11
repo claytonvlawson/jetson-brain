@@ -2,6 +2,5 @@ ollama
 rank_bm25
 ddgs
 beautifulsoup4
-markdown
 requests
 mediapipe
