@@ -4,3 +4,4 @@ ddgs
 beautifulsoup4
 markdown
 requests
+mediapipe

@@ -43,6 +43,7 @@ show_menu(){
   echo "    ${gr}6${r})  Super Saiyan Mode (SSJ mode)  ${dm}[sudo]${r}"
   echo "    ${gr}7${r})  Rebuild the vault index"
   echo "    ${gr}8${r})  Open the README"
+  echo "    ${gr}9${r})  ASL sign detection   ${dm}(streams your Mac webcam -> MediaPipe hands)${r}"
   echo "    ${gr}q${r})  Quit to shell   ${dm}(type 'menu' to reopen)${r}"
 }
 
@@ -79,6 +80,16 @@ ncdd_lab(){
   fi
 }
 
+asl_detect(){
+  echo
+  echo "${b}ASL sign detection${r}"
+  echo "  ${dm}This Jetson runs MediaPipe Hands and classifies signs.${r}"
+  echo "  ${dm}On your Mac run:  cd ~/jetson-brain && ./asl-mac.sh${r}"
+  echo "  ${dm}That streams your Mac webcam frames here for landmarking.${r}"
+  echo
+  exec python3 "$BRAIN_ROOT/asl_server.py"
+}
+
 main(){
   while true; do
     clear 2>/dev/null
@@ -97,6 +108,7 @@ main(){
          pause ;;
       7) python3 "$BRAIN_ROOT/build_index.py"; pause ;;
       8) if [ -f "$BRAIN_ROOT/README.md" ]; then less "$BRAIN_ROOT/README.md"; elif [ -f "$HOME/README.md" ]; then less "$HOME/README.md"; else echo "README not found."; sleep 1; fi ;;
+      9) asl_detect; pause ;;
       q|Q|"") clear 2>/dev/null; echo "At the shell. Type ${b}menu${r} to reopen the menu, or ${b}brain${r} to chat."; break ;;
       *) echo "Unknown choice: $choice"; sleep 1 ;;
     esac
