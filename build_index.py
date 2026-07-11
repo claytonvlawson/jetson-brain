@@ -37,7 +37,6 @@ DEFAULT_OUT = "/mnt/nvme/brain/index/bm25.pkl"
 CHUNK_WORDS = 220        # TARGET: flush an accumulating chunk at ~this size
 FLOOR_WORDS = 90         # sections smaller than this get merged with neighbors
 CEIL_WORDS = 320         # sections larger than this get split (sentence-safe)
-OVERLAP_WORDS = 40       # retained for reference; overlap is now 1 sentence
 
 # Cap on external URLs captured per note.
 MAX_URLS_PER_NOTE = 20
@@ -71,29 +70,20 @@ def tokenize(s):
     return [_s_stem(t) for t in re.findall(r"[a-z0-9]+", s)]
 
 
-def strip_frontmatter(text):
-    # Remove a leading YAML frontmatter block delimited by --- ... --- lines.
+def split_frontmatter(text):
+    # Split a leading YAML frontmatter block from the body in a single scan.
+    # Returns (frontmatter, body): the raw lines between the leading --- and its
+    # closing --- (or "" if absent/malformed), and the text after the closing ---
+    # (or the whole text unchanged when there is no well-formed frontmatter).
     if not text.startswith("---"):
-        return text
+        return "", text
     lines = text.split("\n")
     # First line is the opening ---. Find the closing --- after it.
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
-            return "\n".join(lines[i + 1:])
-    # No closing delimiter found; leave the text as-is.
-    return text
-
-
-def extract_frontmatter(text):
-    # Return the raw frontmatter block (the lines between the leading --- and
-    # its closing ---) or "" when there is no well-formed frontmatter.
-    if not text.startswith("---"):
-        return ""
-    lines = text.split("\n")
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            return "\n".join(lines[1:i])
-    return ""
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1:])
+    # No closing delimiter found; treat as no frontmatter, leave text as-is.
+    return "", text
 
 
 def clean_obsidian(text):
@@ -479,8 +469,7 @@ def build(vault, out):
         rel_source = os.path.relpath(path, vault)
         fallback_title = os.path.splitext(os.path.basename(path))[0]
 
-        frontmatter = extract_frontmatter(raw)
-        body_no_fm = strip_frontmatter(raw)
+        frontmatter, body_no_fm = split_frontmatter(raw)
         title = extract_title(body_no_fm, fallback_title)
 
         # Parse links and urls from the raw post-frontmatter text, BEFORE

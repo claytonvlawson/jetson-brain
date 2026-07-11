@@ -37,7 +37,6 @@ import json
 import hashlib
 import tempfile
 import datetime
-from typing import Optional
 from urllib.parse import urlparse
 
 
@@ -310,8 +309,7 @@ class WebCache:
         except Exception:
             return False
 
-    def store_result(self, query: str, url: str, text: str,
-                     title: Optional[str] = None) -> dict:
+    def store_result(self, query: str, url: str, text: str) -> dict:
         """Persist ONE excerpt as the paired JSON entry + vault note. URL-
         addressed and idempotent: one url owns one pair, so a re-fetch with the
         SAME content is a no-op (short-circuit below) and a re-fetch with CHANGED
@@ -322,7 +320,9 @@ class WebCache:
             if not (url and text and str(text).strip()):
                 return {}
 
-            title_text = title if title else ""
+            # No caller supplies a title today; the note derives its heading from
+            # the page host. Kept as an explicit field for the JSON schema.
+            title_text = ""
 
             # 2. URL-address the pair (filename stem depends only on the url).
             content_sha1 = _sha1(text)

@@ -125,20 +125,15 @@ def _normalized(text):
     return " ".join(_tokens(text))
 
 
-def _content_set(tokens):
-    """Token set with grammatical filler and contraction fragments removed, so
-    the fuzzy matcher keys on meaning rather than phrasing. Never raises."""
+def _match_set(tokens):
+    """The set the fuzzy matcher compares on: content words only (grammatical
+    filler and contraction fragments removed), so phrasing ('what is',
+    'explain', 'tell me about') never dilutes the score. Questions that reduce
+    to no content words simply do not fuzzy-match. Never raises."""
     try:
         return {t for t in tokens if t not in STOPWORDS}
     except Exception:
         return set(tokens) if tokens else set()
-
-
-def _match_set(tokens):
-    """The set the fuzzy matcher compares on: content words only, so phrasing
-    ('what is', 'explain', 'tell me about') never dilutes the score. Questions
-    that reduce to no content words simply do not fuzzy-match. Never raises."""
-    return _content_set(tokens)
 
 
 def _negations(tokens):

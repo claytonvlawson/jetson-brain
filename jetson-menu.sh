@@ -87,7 +87,7 @@ asl_detect(){
   echo "  ${dm}On your Mac run:  cd ~/jetson-brain && ./asl-mac.sh${r}"
   echo "  ${dm}That streams your Mac webcam frames here for landmarking.${r}"
   echo
-  exec python3 "$BRAIN_ROOT/asl_server.py"
+  python3 "$BRAIN_ROOT/asl_server.py"
 }
 
 main(){
@@ -101,7 +101,7 @@ main(){
       1) brain ;;
       2) ollama_pick; pause ;;
       3) ncdd_lab; pause ;;
-      4) "$BRAIN_ROOT/jetson-online.sh" test 2>/dev/null || echo "connectivity script not found"; pause ;;
+      4) if [ -x "$BRAIN_ROOT/jetson-online.sh" ]; then "$BRAIN_ROOT/jetson-online.sh" test; else echo "connectivity script not found"; fi; pause ;;
       5) system_status; pause ;;
       6) echo "Going Super Saiyan. sudo may prompt for your password."
          sudo nvpmodel -m 2 && sudo jetson_clocks && echo "Now:" && nvpmodel -q 2>/dev/null | grep -i 'power mode'
