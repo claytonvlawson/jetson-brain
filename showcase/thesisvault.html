@@ -1,0 +1,656 @@
+<title>ThesisVault — a private research agent on the edge</title>
+<style>
+  :root {
+    /* Claude Code terminal theme: near-black bg, deep orange accent */
+    --bg: #0d0d0d;
+    --bg-2: #111111;
+    --surface: #161616;
+    --surface-2: #1c1c1c;
+    --ink: #cccccc;
+    --ink-soft: #aaaaaa;
+    --muted: #777777;
+    --border: #2a2a2a;
+    --border-strong: #3a3a3a;
+    --accent: #e5670a;
+    --accent-ink: #f5870a;
+    --accent-wash: rgba(229,103,10,0.12);
+    --live: #52d39a;
+    --live-wash: rgba(82,211,154,0.12);
+    --code-bg: #0a0a0a;
+    --code-ink: #cccccc;
+    --code-dim: #666666;
+    --shadow: 0 1px 2px rgba(0,0,0,0.6), 0 20px 50px -28px rgba(0,0,0,0.9);
+    --serif: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    --maxw: 1080px;
+  }
+  /* No light/dark split — always terminal dark */
+  :root[data-theme="light"] {
+    --bg: #0d0d0d; --bg-2: #111111; --surface: #161616; --surface-2: #1c1c1c;
+    --ink: #cccccc; --ink-soft: #aaaaaa; --muted: #777777; --border: #2a2a2a;
+    --border-strong: #3a3a3a; --accent: #e5670a; --accent-ink: #f5870a;
+    --accent-wash: rgba(229,103,10,0.12); --live: #52d39a; --live-wash: rgba(82,211,154,0.12);
+    --code-bg: #0a0a0a; --code-ink: #cccccc; --code-dim: #666666;
+    --shadow: 0 1px 2px rgba(0,0,0,0.6), 0 20px 50px -28px rgba(0,0,0,0.9);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d0d0d; --bg-2: #111111; --surface: #161616; --surface-2: #1c1c1c;
+    --ink: #cccccc; --ink-soft: #aaaaaa; --muted: #777777; --border: #2a2a2a;
+    --border-strong: #3a3a3a; --accent: #e5670a; --accent-ink: #f5870a;
+    --accent-wash: rgba(229,103,10,0.12); --live: #52d39a; --live-wash: rgba(82,211,154,0.12);
+    --code-bg: #0a0a0a; --code-ink: #cccccc; --code-dim: #666666;
+    --shadow: 0 1px 2px rgba(0,0,0,0.6), 0 20px 50px -28px rgba(0,0,0,0.9);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .page {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ::selection { background: var(--accent-wash); }
+
+  /* ---- top bar ---- */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding: 16px 24px; max-width: var(--maxw); margin: 0 auto;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 11px; font-family: var(--mono);
+    font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .brand b { color: var(--accent); font-weight: 600; }
+  .glyph { width: 26px; height: 26px; flex: none; }
+  .theme-btn {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em;
+    color: var(--muted); background: transparent; border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 12px; cursor: pointer; text-transform: uppercase;
+  }
+  .theme-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- hero ---- */
+  .hero { position: relative; padding: 40px 0 24px; overflow: hidden; }
+  #graph { position: absolute; inset: 0; width: 100%; height: 100%;
+    z-index: 0; opacity: 0.4; pointer-events: none; }
+  .hero .wrap { position: relative; z-index: 1; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono);
+    font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-wash);
+    border: 1px solid var(--accent); border-radius: 3px; padding: 5px 11px;
+  }
+  h1 {
+    font-family: var(--mono); font-weight: 600; text-wrap: balance;
+    font-size: clamp(1.8rem, 4vw, 2.8rem); line-height: 1.15; letter-spacing: -0.01em;
+    margin: 20px 0 0; max-width: 22ch;
+  }
+  h1 .warm { color: var(--accent); }
+  .lede {
+    font-size: 0.97rem; color: var(--ink-soft);
+    max-width: 64ch; margin: 16px 0 0; line-height: 1.7;
+  }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; align-items: center; }
+  .btn {
+    font-family: var(--mono); font-size: 0.88rem; font-weight: 600;
+    border-radius: 4px; padding: 10px 18px; cursor: pointer; border: 1px solid transparent;
+    text-decoration: none; display: inline-flex; align-items: center; gap: 9px;
+  }
+  .btn-primary { background: var(--accent); color: #0d0d0d; border-color: var(--accent); }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-ghost { background: transparent; color: var(--ink); border-color: var(--border-strong); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+  .gated-note { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  /* ---- live device card ---- */
+  .device {
+    margin-top: 28px; display: grid; grid-template-columns: auto 1fr auto; gap: 18px;
+    align-items: center; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 18px; box-shadow: var(--shadow); max-width: 640px;
+    border-left: 3px solid var(--accent);
+  }
+  .device .chip-live {
+    display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono);
+    font-size: 12px; letter-spacing: 0.05em; color: var(--live);
+    background: var(--live-wash); border-radius: 3px; padding: 5px 10px; white-space: nowrap;
+  }
+  .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--live);
+    box-shadow: 0 0 0 0 var(--live); animation: pulse 2.4s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 var(--live-wash);} 70%{box-shadow:0 0 0 6px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+  .device .spec { font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .device .spec b { color: var(--ink); font-weight: 600; }
+  .device .price { font-family: var(--mono); font-size: 1.3rem; color: var(--accent); text-align: right; white-space: nowrap; }
+  .device .price small { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; }
+
+  /* ---- section scaffolding ---- */
+  section { padding: 40px 0; border-top: 1px solid var(--border); }
+  .sec-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 8px; }
+  h2 { font-family: var(--mono); font-weight: 600; font-size: clamp(1.3rem, 2.6vw, 1.9rem);
+    line-height: 1.2; letter-spacing: -0.01em; margin: 0 0 12px; text-wrap: balance; }
+  .sec-intro { color: var(--ink-soft); max-width: 64ch; margin: 0 0 26px; font-size: 0.95rem; line-height: 1.7; }
+
+  /* ---- stats strip ---- */
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+    background: var(--border); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .stat { background: var(--surface); padding: 18px 14px; }
+  .stat .n { font-family: var(--mono); font-size: clamp(1.3rem, 2.5vw, 1.8rem);
+    color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1; }
+  .stat .n .u { font-size: 0.6em; color: var(--muted); margin-left: 2px; }
+  .stat .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); margin-top: 8px; }
+
+  /* ---- transcript ---- */
+  .demo-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .tabs { display: flex; gap: 8px; margin: 4px 0 20px; flex-wrap: wrap; }
+  .tab { font-family: var(--mono); font-size: 12px; letter-spacing: 0.03em;
+    color: var(--muted); background: var(--surface); border: 1px solid var(--border);
+    border-radius: 3px; padding: 7px 13px; cursor: pointer; }
+  .tab[aria-selected="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .terminal { background: var(--code-bg); border: 1px solid var(--accent);
+    border-radius: 6px; box-shadow: var(--shadow); overflow: hidden; }
+  .term-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); }
+  .dots { display: flex; gap: 6px; }
+  .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); display: block; }
+  .dots i:first-child { background: #ff5f57; }
+  .dots i:nth-child(2) { background: #febc2e; }
+  .dots i:nth-child(3) { background: #28c840; }
+  .term-title { font-family: var(--mono); font-size: 12px; color: var(--code-dim); letter-spacing: 0.04em; }
+  .term-body { padding: 20px 20px 24px; }
+  .conv { display: none; }
+  .conv.on { display: block; animation: fade 0.3s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .u-line { font-family: var(--mono); font-size: 13px; color: var(--code-ink); display: flex; gap: 10px; align-items: flex-start; }
+  .u-line .p { color: var(--accent); flex: none; }
+  .status { font-family: var(--mono); font-size: 11px; color: var(--code-dim);
+    margin: 12px 0 6px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .status b { color: var(--live); font-weight: 500; }
+  .answer { color: var(--code-ink); font-family: var(--mono); font-size: 13px; line-height: 1.7; margin-top: 10px; }
+  .answer p { margin: 0 0 10px; }
+  .answer strong { color: var(--accent); }
+  .answer ul { margin: 0 0 10px; padding-left: 0; list-style: none; }
+  .answer li { position: relative; padding-left: 18px; margin-bottom: 8px; }
+  .answer li::before { content: "⏺"; position: absolute; left: 0; top: 0;
+    font-size: 9px; color: var(--accent); line-height: 1.9; }
+  .cites { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border-strong); }
+  .cites .lbl { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--code-dim); margin-bottom: 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip { font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
+    background: transparent; border: 1px solid var(--border-strong); border-radius: 3px;
+    padding: 4px 9px; display: inline-flex; align-items: center; gap: 6px; }
+  .chip .fld { color: var(--muted); }
+  .chip.linked { border-style: dashed; opacity: 0.7; }
+  .demo-foot { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 12px; }
+
+  /* ---- pipeline ---- */
+  .pipe { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .step { background: var(--surface); border: 1px solid var(--border); border-radius: 5px;
+    padding: 16px 14px; position: relative; }
+  .step .no { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: 0.1em; }
+  .step h3 { font-family: var(--mono); font-size: 0.92rem; margin: 8px 0 6px; color: var(--ink); }
+  .step p { font-size: 0.82rem; color: var(--muted); margin: 0; line-height: 1.55; }
+  .step .tool { font-family: var(--mono); font-size: 10px; color: var(--accent);
+    margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--border-strong); display: block; }
+  .arrow { color: var(--accent); }
+
+  /* ---- why grid ---- */
+  .why { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 5px;
+    padding: 22px; box-shadow: var(--shadow); }
+  .card .ico { font-size: 20px; line-height: 1; }
+  .card h3 { font-family: var(--mono); font-weight: 600; font-size: 1.05rem; margin: 12px 0 8px; color: var(--ink); }
+  .card p { margin: 0; color: var(--ink-soft); font-size: 0.88rem; line-height: 1.65; }
+
+  /* ---- roadmap ---- */
+  .road { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .lane { background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 20px; }
+  .lane .state { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: 3px; display: inline-block; }
+  .lane.done .state { color: var(--live); background: var(--live-wash); }
+  .lane.now .state { color: var(--accent); background: var(--accent-wash); }
+  .lane.next .state { color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); }
+  .lane h3 { font-family: var(--mono); font-size: 0.97rem; margin: 12px 0 8px; color: var(--ink); }
+  .lane ul { margin: 0; padding-left: 16px; color: var(--ink-soft); font-size: 0.86rem; }
+  .lane li { margin-bottom: 6px; }
+
+  /* ---- footer ---- */
+  footer { border-top: 1px solid var(--border); padding: 28px 0 52px; margin-top: 16px; }
+  .foot { display: flex; flex-wrap: wrap; gap: 14px 30px; align-items: center; justify-content: space-between; }
+  .foot p { margin: 0; color: var(--muted); font-size: 0.82rem; font-family: var(--mono); }
+  .foot .disc { max-width: 64ch; line-height: 1.65; }
+
+  @media (max-width: 860px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .pipe { grid-template-columns: 1fr 1fr; }
+    .why, .road { grid-template-columns: 1fr; }
+    .device { grid-template-columns: 1fr; text-align: left; }
+    .device .price { text-align: left; }
+  }
+  @media (max-width: 600px) {
+    h1 { font-size: 1.5rem; }
+    .pipe { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .conv.on { animation: none; }
+    .pulse { animation: none; }
+  }
+</style>
+
+<div class="page">
+  <div class="topbar">
+    <div class="brand">
+      <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="14" fill="none" stroke="var(--accent)" stroke-width="1.4" opacity="0.5"/>
+        <circle cx="16" cy="9" r="2.4" fill="var(--accent)"/>
+        <circle cx="9" cy="20" r="2.4" fill="var(--ink)"/>
+        <circle cx="23" cy="20" r="2.4" fill="var(--ink)"/>
+        <path d="M16 9 L9 20 M16 9 L23 20 M9 20 L23 20" stroke="var(--accent)" stroke-width="1.2" opacity="0.6"/>
+      </svg>
+      <span>Thesis<b>Vault</b></span>
+    </div>
+    <button class="theme-btn" id="theme" type="button" aria-label="Toggle color theme">Theme</button>
+  </div>
+
+  <header class="hero">
+    <canvas id="graph" aria-hidden="true"></canvas>
+    <div class="wrap">
+      <span class="eyebrow">Ongoing project · learnwithclay.ai</span>
+      <h1>A research agent that reads <span class="warm">my thesis</span>, and nothing it shouldn't</h1>
+      <p class="lede">ThesisVault is a private, offline question-answering agent for the scholarship behind my work on
+        language deprivation and Deaf education. It runs entirely on a palm-sized AI computer on my desk. No cloud,
+        no API keys, no data leaving the device, and every answer is grounded in and cited from the source notes.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#demo">See a real answer &darr;</a>
+        <a class="btn btn-ghost" id="trylive" href="#roadmap" aria-disabled="true">Try it live &mdash; by request</a>
+        <span class="gated-note">live endpoint opens when the device is online</span>
+      </div>
+
+      <div class="device" role="group" aria-label="Device status">
+        <span class="chip-live"><span class="pulse" aria-hidden="true"></span>DEVICE ONLINE</span>
+        <span class="spec"><b>NVIDIA Jetson Orin Nano</b> · 8&nbsp;GB · aarch64<br>Ollama &middot; qwen2.5:7b &middot; fully offline</span>
+        <span class="price">~$249<small>total hardware</small></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+
+    <section aria-label="At a glance">
+      <div class="stats">
+        <div class="stat"><div class="n">986</div><div class="k">indexed passages</div></div>
+        <div class="stat"><div class="n">305</div><div class="k">source notes</div></div>
+        <div class="stat"><div class="n">2,487<span class="u">↔</span></div><div class="k">wikilinks traversed</div></div>
+        <div class="stat"><div class="n">0</div><div class="k">API keys / cloud calls</div></div>
+        <div class="stat"><div class="n">$0<span class="u">/mo</span></div><div class="k">running cost</div></div>
+      </div>
+    </section>
+
+    <section id="demo">
+      <div class="demo-head">
+        <div>
+          <p class="sec-label">The demo is real</p>
+          <h2>Ask it a question, watch it cite its sources</h2>
+        </div>
+      </div>
+      <p class="sec-intro">These are unedited answers captured from the live agent on the Jetson. Each one retrieves
+        the most relevant passages from the vault, follows the wikilinks between notes to pull in related context,
+        then answers using only what it found, citing every note it drew from.</p>
+
+      <div class="tabs" role="tablist" aria-label="Example questions">
+        <button class="tab" role="tab" id="tab0" aria-controls="conv0" aria-selected="true">01 · What is language deprivation?</button>
+        <button class="tab" role="tab" id="tab1" aria-controls="conv1" aria-selected="false">02 · Wyatte Hall on public-health stakes</button>
+      </div>
+
+      <div class="terminal">
+        <div class="term-bar">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="term-title">brain@jetson-orin — vault-grounded RAG</span>
+        </div>
+        <div class="term-body">
+
+          <div class="conv on" id="conv0" role="tabpanel" aria-labelledby="tab0">
+            <div class="u-line"><span class="p">you&gt;</span><span>What is language deprivation and why does it matter for deaf children?</span></div>
+            <div class="status"><span>retrieved <b>6</b> passages + <b>3</b> linked notes</span><span>model <b>qwen2.5:7b</b></span><span>answered on-device in <b>52.4s</b></span></div>
+            <div class="answer">
+              <p>Language deprivation refers to the lack of access to a natural language, particularly sign language,
+                during early childhood development in deaf individuals. This can result from various factors such as
+                being born to hearing parents who do not use sign language, or from policies that restrict the use of
+                sign language.</p>
+              <p><strong>Why it matters for deaf children:</strong></p>
+              <ul>
+                <li><strong>Negative outcomes:</strong> Depriving deaf children of a natural language like sign language
+                  can lead to poor age-expected language, cognitive, and academic outcomes. Deaf children whose first
+                  exposure to sign language is not fluent, or occurs later in life, tend to have worse developmental
+                  trajectories than those exposed early.</li>
+                <li><strong>Control case:</strong> Native signers (deaf children of Deaf parents) show age-expected
+                  language, cognitive, and academic outcomes similar to hearing peers, which indicates that natural sign
+                  language exposure can mitigate the effects of deprivation.</li>
+                <li><strong>Clinical and research importance:</strong> Establishing language deprivation as a
+                  clinical-developmental construct matters for public-health and medical venues. Work like Murray, Hall
+                  &amp; Snoddon (2019), <em>Necessity of Signed Languages</em>, published in the Bulletin of the WHO,
+                  demonstrates the weight of this argument.</li>
+                <li><strong>Prevention:</strong> Sustained early sign exposure can close much of the outcome gap between
+                  deaf children with and without early language access.</li>
+              </ul>
+              <p>In summary, ensuring that deaf children have access to a natural language during early development is
+                critical for their linguistic, cognitive, and academic success.</p>
+            </div>
+            <div class="cites">
+              <div class="lbl">Grounded in — 9 vault notes</div>
+              <div class="chips" data-cites="0"></div>
+            </div>
+          </div>
+
+          <div class="conv" id="conv1" role="tabpanel" aria-labelledby="tab1">
+            <div class="u-line"><span class="p">you&gt;</span><span>How does Wyatte Hall frame the public-health stakes of early language access?</span></div>
+            <div class="status"><span>retrieved <b>6</b> passages + <b>3</b> linked notes</span><span>model <b>qwen2.5:7b</b></span><span>answered on-device in <b>43.4s</b></span></div>
+            <div class="answer">
+              <p>Wyatte C. Hall frames the public-health stakes of early language access in several key ways:</p>
+              <ul>
+                <li><strong>Preventable harm:</strong> Denying deaf infants exposure to sign language is a preventable
+                  developmental harm with lifelong consequences, not merely a cultural debate (Hall 2017).</li>
+                <li><strong>Neurodevelopmental disorder:</strong> He formalizes Language Deprivation Syndrome as a
+                  neurodevelopmental disorder with sociocultural origins, with irreversible neurological changes when
+                  language is introduced late (Hall, Levin &amp; Anderson 2017).</li>
+                <li><strong>Mental-health outcomes:</strong> Early deprivation is linked to increased depression,
+                  anxiety, and trauma exposure in adulthood (Murray, Hall &amp; Snoddon 2024; Hall, Dye &amp; Siddiqi 2023).</li>
+                <li><strong>A global crisis:</strong> Fewer than 2% of deaf children worldwide receive early sign
+                  language access, making it a significant public-health issue (Glickman &amp; Hall 2018).</li>
+                <li><strong>Intersectionality:</strong> Race, rurality, and socioeconomic status intersect with the
+                  incidence of language deprivation, deepening health disparities (Hall et al. 2018).</li>
+                <li><strong>Policy and practice:</strong> He places responsibility on clinical gatekeepers such as
+                  audiologists and early-intervention professionals, and calls for training to recognize linguistic
+                  injury (Hall, Levin &amp; Anderson 2017; Caselli, Hall &amp; Henner 2020).</li>
+              </ul>
+              <p>Together these points frame early sign language access as a public-health measure to prevent lifelong
+                adverse outcomes.</p>
+            </div>
+            <div class="cites">
+              <div class="lbl">Grounded in — 7 vault notes</div>
+              <div class="chips" data-cites="1"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <p class="demo-foot">// If the vault cannot answer, the agent says so and only then reaches the open web
+        (keyless DuckDuckGo). It never fills gaps with unsourced guesses.</p>
+    </section>
+
+    <section id="how">
+      <p class="sec-label">Under the hood</p>
+      <h2>Retrieval first. Generation second. Citations always</h2>
+      <p class="sec-intro">A small, legible pipeline, all of it pure Python running on the device. No vector database
+        service, no external inference, nothing that phones home.</p>
+      <div class="pipe">
+        <div class="step">
+          <div class="no">01 <span class="arrow">→</span></div>
+          <h3>Retrieve</h3>
+          <p>BM25 ranks the vault and returns the six passages most relevant to your question.</p>
+          <span class="tool">rank_bm25 · 986 chunks</span>
+        </div>
+        <div class="step">
+          <div class="no">02 <span class="arrow">→</span></div>
+          <h3>Expand the graph</h3>
+          <p>Notes that the top passages link to are pulled in as extra context, so related ideas travel together.</p>
+          <span class="tool">wikilink graph · 2,487 edges</span>
+        </div>
+        <div class="step">
+          <div class="no">03 <span class="arrow">→</span></div>
+          <h3>Answer from the vault</h3>
+          <p>A local LLM answers using only the retrieved snippets and cites each note by filename.</p>
+          <span class="tool">Ollama · qwen2.5:7b</span>
+        </div>
+        <div class="step">
+          <div class="no">04 <span class="arrow">→</span></div>
+          <h3>Web only if needed</h3>
+          <p>If the vault is genuinely insufficient, it says so and makes a keyless web search, then answers again.</p>
+          <span class="tool">DuckDuckGo · no key</span>
+        </div>
+        <div class="step">
+          <div class="no">05</div>
+          <h3>Cache</h3>
+          <p>Answers are cached by meaning, so a repeated question returns instantly instead of re-running the model.</p>
+          <span class="tool">content-word cache</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="why">
+      <p class="sec-label">Why build it this way</p>
+      <h2>Private by construction, not by promise</h2>
+      <div class="why">
+        <div class="card">
+          <div class="ico">🔒</div>
+          <h3>Nothing leaves the device</h3>
+          <p>The model, the index, and the notes all live on the Jetson. There is no account, no telemetry, and no
+            third party in the loop. Sensitive research reading stays local.</p>
+        </div>
+        <div class="card">
+          <div class="ico">📚</div>
+          <h3>Grounded in real scholarship</h3>
+          <p>Every answer is built from and cited to the peer-reviewed sources in the vault, so a claim can always be
+            traced back to Humphries, Hall, Padden, the WFD, and the rest.</p>
+        </div>
+        <div class="card">
+          <div class="ico">🌱</div>
+          <h3>Free and low-power</h3>
+          <p>One inexpensive edge computer, no monthly bill, and a power draw closer to a lightbulb than a server. The
+            whole system is a proof that useful, honest AI does not require the cloud.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <p class="sec-label">Where it is going</p>
+      <h2>An ongoing project</h2>
+      <p class="sec-intro">Built and running today, growing deliberately. The near-term goal is a stable public
+        endpoint so anyone can query the vault from this site.</p>
+      <div class="road">
+        <div class="lane done">
+          <span class="state">Shipped</span>
+          <h3>The agent works, on-device</h3>
+          <ul>
+            <li>Vault-first grounded answers with citations</li>
+            <li>Wikilink graph expansion for context</li>
+            <li>Keyless web fallback and semantic answer cache</li>
+            <li>Runs offline on the Jetson Orin Nano</li>
+          </ul>
+        </div>
+        <div class="lane now">
+          <span class="state">In progress</span>
+          <h3>A live endpoint for the site</h3>
+          <ul>
+            <li>HTTP API in front of the agent</li>
+            <li>Public URL over a Tailscale Funnel tunnel</li>
+            <li>Rate limiting and a locked-down prompt</li>
+            <li>An embedded chat widget here</li>
+          </ul>
+        </div>
+        <div class="lane next">
+          <span class="state">Next</span>
+          <h3>Deeper grounding</h3>
+          <ul>
+            <li>Hybrid keyword + semantic retrieval</li>
+            <li>More of the thesis corpus indexed</li>
+            <li>ASL video sources alongside the text</li>
+            <li>Shareable, linkable answer transcripts</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    <div class="wrap foot">
+      <p>ThesisVault · a learnwithclay.ai project</p>
+      <p class="disc">A living research tool, not a finished product. Answers are generated by a small local model from
+        cited sources and can still be imperfect; treat them as a grounded starting point, not a final authority. The
+        live demo runs only while the device is powered on.</p>
+    </div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- citation data (real filenames returned by the agent) ----
+  var CITES = [
+    [
+      ["Sources/Language Deprivation", "Humphries et al 2014 - Ensuring Language Acquisition", false],
+      ["People", "Wyatte C. Hall", false],
+      ["Sources/Language Deprivation", "Murray Hall Snoddon 2019 - Necessity of Signed Languages", false],
+      ["LanguageDeprivationAgent/Core", "What Is Language Deprivation", false],
+      ["LanguageDeprivationAgent/Core", "Research Gaps", true],
+      ["Sources", "WFD 2023 - Declaration on Rights of Deaf Children Jeju", false],
+      ["Sources/Language Deprivation", "Humphries et al 2012 - Reversing the Historical Error", false],
+      ["People", "Tom Humphries", true],
+      ["People", "Carol Padden", true]
+    ],
+    [
+      ["LanguageDeprivationAgent/Core", "Mental Health and Public Health", false],
+      ["Sources/Language Deprivation", "Hall 2017 - What You Dont Know Can Hurt You", false],
+      ["People", "Wyatte C. Hall", false],
+      ["Sources/Language Deprivation", "Hall Dye Siddiqi 2023 - ACEs and Hearing Loss", false],
+      ["Sources/Language Deprivation", "Hall Levin Anderson 2017 - Language Deprivation Syndrome", false],
+      ["Sources/Language Deprivation", "Hall et al 2018 - Dinner Table Syndrome", true],
+      ["Sources/ASL Linguistics and Acquisition", "Caselli Hall Henner 2020 - Illusion of Inclusion", true]
+    ]
+  ];
+  function shortFolder(f) {
+    var parts = f.split("/");
+    return parts[parts.length - 1];
+  }
+  document.querySelectorAll(".chips").forEach(function (box) {
+    var idx = +box.getAttribute("data-cites");
+    CITES[idx].forEach(function (c) {
+      var el = document.createElement("span");
+      el.className = "chip" + (c[2] ? " linked" : "");
+      el.innerHTML = '<span class="fld">' + shortFolder(c[0]) + '/</span>' +
+        c[1].replace(/&/g, "&amp;").replace(/</g, "&lt;") +
+        (c[2] ? ' <span class="fld">(linked)</span>' : '');
+      box.appendChild(el);
+    });
+  });
+
+  // ---- tabs ----
+  var tabs = [document.getElementById("tab0"), document.getElementById("tab1")];
+  var panes = [document.getElementById("conv0"), document.getElementById("conv1")];
+  function select(i) {
+    tabs.forEach(function (t, j) { t.setAttribute("aria-selected", j === i ? "true" : "false"); });
+    panes.forEach(function (p, j) { p.classList.toggle("on", j === i); });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener("click", function () { select(i); });
+    t.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        var ni = (i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+        tabs[ni].focus(); select(ni);
+      }
+    });
+  });
+
+  // ---- theme toggle ----
+  var root = document.documentElement;
+  var btn = document.getElementById("theme");
+  btn.addEventListener("click", function () {
+    var cur = root.getAttribute("data-theme");
+    if (!cur) {
+      cur = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    root.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+    drawGraph();
+  });
+
+  // ---- hero knowledge graph (the wikilink motif) ----
+  var canvas = document.getElementById("graph");
+  var ctx = canvas.getContext("2d");
+  var nodes = [], edges = [], raf = null;
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function build() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var count = Math.max(22, Math.min(60, Math.round(w / 22)));
+    nodes = []; edges = [];
+    for (var i = 0; i < count; i++) {
+      nodes.push({
+        x: Math.random() * w, y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.1, vy: (Math.random() - 0.5) * 0.1,
+        r: Math.random() * 1.4 + 0.9, hub: Math.random() < 0.16
+      });
+    }
+    for (var a = 0; a < nodes.length; a++) {
+      for (var b = a + 1; b < nodes.length; b++) {
+        var dx = nodes[a].x - nodes[b].x, dy = nodes[a].y - nodes[b].y;
+        if (Math.sqrt(dx * dx + dy * dy) < w / 9) edges.push([a, b]);
+      }
+    }
+  }
+  function drawGraph() {
+    if (!canvas.clientWidth) return;
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    ctx.clearRect(0, 0, w, h);
+    /* Claude Code orange (#e5670a) for hub nodes, dim orange for edges/leaf nodes */
+    var accent = "#e5670a";
+    var dim = "#3a2a1a";
+    ctx.strokeStyle = dim; ctx.globalAlpha = 0.5; ctx.lineWidth = 0.5;
+    edges.forEach(function (e) {
+      ctx.beginPath();
+      ctx.moveTo(nodes[e[0]].x, nodes[e[0]].y);
+      ctx.lineTo(nodes[e[1]].x, nodes[e[1]].y);
+      ctx.stroke();
+    });
+    ctx.globalAlpha = 1;
+    nodes.forEach(function (n) {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.hub ? n.r + 1.6 : n.r, 0, Math.PI * 2);
+      ctx.fillStyle = n.hub ? accent : "#2a1a0a";
+      ctx.globalAlpha = n.hub ? 0.9 : 0.5;
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+  }
+  function step() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    nodes.forEach(function (n) {
+      n.x += n.vx; n.y += n.vy;
+      if (n.x < 0 || n.x > w) n.vx *= -1;
+      if (n.y < 0 || n.y > h) n.vy *= -1;
+    });
+    drawGraph();
+    raf = requestAnimationFrame(step);
+  }
+  function start() {
+    build(); drawGraph();
+    if (!reduce) { if (raf) cancelAnimationFrame(raf); raf = requestAnimationFrame(step); }
+  }
+  var rt;
+  window.addEventListener("resize", function () {
+    clearTimeout(rt); rt = setTimeout(start, 180);
+  });
+  start();
+})();
+</script>
