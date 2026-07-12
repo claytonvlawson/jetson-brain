@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py prime_cache.py eval_brain.py gold_questions.jsonl install.sh requirements.txt jetson-online.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py prime_cache.py eval_brain.py gold_questions.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -85,6 +85,7 @@ scp -q \
   "${HERE}/install.sh" \
   "${HERE}/requirements.txt" \
   "${HERE}/jetson-online.sh" \
+  "${HERE}/jetson-wifi.sh" \
   "${HERE}/jetson-online.service" \
   "${HERE}/asl_server.py" \
   "${HERE}/asl_sign_model.py" \
@@ -96,7 +97,7 @@ scp -q \
 
 # ---- Make scripts executable and install --------------------------------
 echo "==> Marking scripts executable and running install.sh on the Jetson ..."
-ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '${REMOTE}/asl-mac.sh' '${REMOTE}/jetson-menu.sh' && bash '${REMOTE}/install.sh'"
+ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '${REMOTE}/jetson-wifi.sh' '${REMOTE}/asl-mac.sh' '${REMOTE}/jetson-menu.sh' && bash '${REMOTE}/install.sh'"
 
 # ---- Done ---------------------------------------------------------------
 cat <<EOF
@@ -115,6 +116,12 @@ Next steps:
        - On the Jetson: bash ${REMOTE}/install.sh --net
      This makes the Mac share its WiFi (en0) over the USB-C link (en10) and
      installs the jetson-online.service so the Jetson restores its route on boot.
+
+  3. WiFi (Mac-independent internet; keeps Tailscale up when the Mac sleeps):
+       ssh ${JETSON}
+       bash ${REMOTE}/jetson-wifi.sh "YourSSID"
+     WiFi becomes the primary path (route metric 100); the USB-C link stays a
+     metric-700 fallback. Check anytime with: bash ${REMOTE}/jetson-wifi.sh --status
 
 DEPLOY OK: ${MD_COUNT} md files, code + install pushed to ${JETSON}:${REMOTE}
 EOF

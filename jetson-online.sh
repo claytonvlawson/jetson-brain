@@ -21,6 +21,11 @@ FALLBACK_IFACE="l4tbr0"
 DNS1="8.8.8.8"
 DNS2="1.1.1.1"
 CURL_TARGET="https://duckduckgo.com"
+# The USB-C link to the Mac is now a FALLBACK path behind WiFi. Give its default
+# route a high metric so a lower-metric WiFi route (see jetson-wifi.sh, metric
+# 100) wins whenever WiFi is up, and the Jetson only falls back to the Mac link
+# when WiFi is gone. Override with USB_ROUTE_METRIC=... if needed.
+USB_ROUTE_METRIC="${USB_ROUTE_METRIC:-700}"
 
 # Detect the actual USB gadget interface (l4tbr* or usb*), fall back to l4tbr0.
 detect_iface() {
@@ -61,12 +66,17 @@ run_tests() {
 
 configure_route() {
   local iface="$1"
-  echo "Ensuring default route via ${GATEWAY} dev ${iface} (sudo may prompt) ..."
+  echo "Ensuring fallback default route via ${GATEWAY} dev ${iface} metric ${USB_ROUTE_METRIC} (sudo may prompt) ..."
   if ! ip link show "${iface}" >/dev/null 2>&1; then
     echo "WARN: interface ${iface} not present yet; trying anyway."
   fi
-  sudo ip route replace default via "${GATEWAY}" dev "${iface}"
-  echo "Route set: default via ${GATEWAY} dev ${iface}"
+  # Drain any pre-existing default routes via this gateway+iface. An older run of
+  # this script (before WiFi-primary) installed a metric-0 default that would
+  # still outrank WiFi's metric-100 route, so remove them all before adding the
+  # single high-metric fallback below.
+  while sudo ip route del default via "${GATEWAY}" dev "${iface}" 2>/dev/null; do :; done
+  sudo ip route replace default via "${GATEWAY}" dev "${iface}" metric "${USB_ROUTE_METRIC}"
+  echo "Route set: default via ${GATEWAY} dev ${iface} metric ${USB_ROUTE_METRIC} (fallback behind WiFi)"
 }
 
 configure_dns() {
