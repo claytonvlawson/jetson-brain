@@ -97,6 +97,21 @@ TOP_K_DEEP = 8   # was 6
 # canonical primary notes (CRPD/Article 2 Definitions) are not buried under
 # dense secondary notes that merely repeat the query terms more often.
 FOLDER_BOOST = 4.0
+
+# Query-time semantic rerank of BM25 candidates. After BM25 + section boost, the
+# top hit is often a dense secondary note that merely repeats query words while
+# the canonical primary note sits a few ranks down. Reranking the top-N BM25
+# candidates by nomic-embed-text cosine to the query pulls the on-topic note up.
+# Query-time only: no re-index, no dense vectors in the pickle. Reuses the SAME
+# Ollama embed path as the semantic router (semantic_cache._embed/_normalize/_dot).
+# Self-degrading: any embed failure falls back to BM25 order and never blocks.
+RERANK_CAND_N = 20            # rerank this many top BM25 candidates
+RERANK_CHUNK_CHARS = 500     # truncate chunk text before embedding
+RERANK_EMBED_MODEL = "nomic-embed-text"
+RERANK_TIMEOUT = 30
+_RERANK_VECS = {}            # chunk key -> normalized embedding (in-process memo)
+_RERANK_ENABLED = True       # flips False after a hard embed failure this run
+
 MAX_WEB_RESULTS = 5
 MAX_WEB_FETCH = 3
 WEB_FETCH_TIMEOUT = 8
@@ -387,6 +402,51 @@ def _apply_section_boost(scores, chunks, qtok):
                 boosted = list(scores)
             boosted[i] += FOLDER_BOOST
     return boosted if boosted is not None else scores
+
+
+def _rerank_by_embedding(question, chunks, cand_ids):
+    """Reorder BM25 candidate chunk-indices by query<->chunk cosine using
+    nomic-embed-text. Returns a reordered list of the same ids; on any failure
+    returns cand_ids unchanged (BM25 order). Never raises, never blocks."""
+    global _RERANK_ENABLED
+    if not _RERANK_ENABLED or len(cand_ids) < 2:
+        return cand_ids
+    try:
+        from semantic_cache import _embed, _normalize, _dot
+    except Exception:
+        _RERANK_ENABLED = False
+        return cand_ids
+    try:
+        qvec = _embed(question, OLLAMA_HOST, RERANK_EMBED_MODEL, RERANK_TIMEOUT)
+        if not qvec:
+            # embedder unreachable: disable for the rest of the run so we do not
+            # pay a timeout per question, and keep BM25 order.
+            _RERANK_ENABLED = False
+            return cand_ids
+        qv = _normalize(qvec)
+        scored = []
+        any_vec = False
+        for i in cand_ids:
+            c = chunks[i]
+            cid = c.get("id")
+            key = cid if cid is not None else ("_idx", i)
+            cv = _RERANK_VECS.get(key, False)   # False = not seen; None = un-embeddable
+            if cv is False:
+                vec = _embed((c.get("text") or "")[:RERANK_CHUNK_CHARS],
+                             OLLAMA_HOST, RERANK_EMBED_MODEL, RERANK_TIMEOUT)
+                cv = _normalize(vec) if vec else None
+                _RERANK_VECS[key] = cv
+            if cv is None:
+                scored.append((float("-inf"), i))   # sinks below embedded ones
+            else:
+                any_vec = True
+                scored.append((_dot(qv, cv), i))
+        if not any_vec:
+            return cand_ids
+        scored.sort(key=lambda p: p[0], reverse=True)
+        return [i for _, i in scored]
+    except Exception:
+        return cand_ids
 
 
 # ---------------------------------------------------------------------------
@@ -1021,9 +1081,13 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     top_score = 0.0
     if len(scores):
         ranked = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)
-        for i in ranked[:(TOP_K_DEEP if model == DEEP_MODEL else TOP_K_FAST)]:
-            if scores[i] <= 0:
-                continue
+        keep_k = TOP_K_DEEP if model == DEEP_MODEL else TOP_K_FAST
+        # Candidate pool: the top BM25 hits with a positive score.
+        cand_ids = [i for i in ranked if scores[i] > 0][:RERANK_CAND_N]
+        # Semantic rerank the pool, then keep the top keep_k. Falls back to BM25
+        # order transparently when embeddings are unavailable.
+        order = _rerank_by_embedding(question, chunks, cand_ids)
+        for i in order[:keep_k]:
             retrieved.append(chunks[i])
         if ranked:
             try:

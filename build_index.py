@@ -433,17 +433,32 @@ def extract_urls(text):
     return urls[:MAX_URLS_PER_NOTE]
 
 
+# Directory names that hold build/dependency artifacts, never vault content.
+# Any note whose path descends through one of these is skipped so their READMEs
+# and license .md files do not pollute BM25 statistics. Pruned in-place during
+# os.walk so the walker never descends into them (handles arbitrary nesting such
+# as Publishing/docx/node_modules/... and LanguageDeprivationAgent/agent/.venv/...).
+_JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv"}
+
+
 def build(vault, out):
     if not os.path.isdir(vault):
         print("ERROR: vault directory not found: %s" % vault)
         return 1
 
     md_files = []
-    for root, _dirs, files in os.walk(vault):
+    pruned = 0
+    for root, dirs, files in os.walk(vault):
+        # Prune build/dependency subtrees in-place so os.walk does not descend.
+        keep = [d for d in dirs if d not in _JUNK_DIR_NAMES]
+        pruned += len(dirs) - len(keep)
+        dirs[:] = keep
         for name in files:
             if name.lower().endswith(".md"):
                 md_files.append(os.path.join(root, name))
     md_files.sort()
+    if pruned:
+        print("Skipped %d build/dependency subtree(s) (node_modules/site-packages/.venv)." % pruned)
 
     chunks = []
     next_id = 0
