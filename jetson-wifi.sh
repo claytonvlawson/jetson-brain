@@ -94,19 +94,27 @@ else
     || die "could not connect to open network '${SSID}'."
 fi
 
-# --- Make it stick: autoconnect on boot, sane route metric -------------------
+# --- Make it stick: autoconnect on boot, WiFi-primary route + DNS -----------
 # The profile NetworkManager created is normally named after the SSID.
 PROFILE="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | awk -F: -v d="${WIFI_DEV}" '$2==d{print $1; exit}')"
 PROFILE="${PROFILE:-${SSID}}"
+# Tune the profile so WiFi is the primary path AND owns DNS:
+#   route-metric 100    -> WiFi default route outranks the USB fallback (metric 700)
+#   dns 8.8.8.8/1.1.1.1  -> deterministic public resolvers, not just DHCP's
+#   dns-search "~."     -> WiFi is the catch-all DNS routing link, so resolution
+#                          follows the primary path and keeps working when the Mac
+#                          (USB link) sleeps and its own "~." route disappears.
 sudo nmcli connection modify "${PROFILE}" \
   connection.autoconnect yes \
   connection.autoconnect-priority 10 \
-  ipv4.route-metric 100 2>/dev/null || warn "could not tune profile '${PROFILE}' (connected anyway)."
-# ipv4.route-metric only takes effect when the profile is (re)activated. Bounce
-# it up now so the WiFi default route gets metric 100 immediately; otherwise it
-# keeps NetworkManager's old (higher) metric until the next reboot.
+  ipv4.route-metric 100 \
+  ipv4.dns "8.8.8.8,1.1.1.1" \
+  ipv4.dns-search "~." 2>/dev/null || warn "could not tune profile '${PROFILE}' (connected anyway)."
+# route-metric and DNS only take effect when the profile is (re)activated. Bounce
+# it up now so they apply immediately; otherwise the live route keeps NM's old
+# (higher) metric and old DNS until the next reboot.
 sudo nmcli connection up "${PROFILE}" ifname "${WIFI_DEV}" >/dev/null 2>&1 || true
-ok "profile '${PROFILE}' set to auto-connect on boot (WiFi route metric 100, primary)."
+ok "profile '${PROFILE}' set to auto-connect on boot (WiFi primary: route metric 100, DNS catch-all)."
 
 # --- Verify the WiFi path itself (independent of the USB/Mac route) ----------
 say "\n${b}Verifying internet over WiFi (${WIFI_DEV})...${r}"
