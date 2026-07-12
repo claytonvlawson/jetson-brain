@@ -68,8 +68,8 @@ DEEP_MODEL = "qwen2.5:7b"
 # Generation options threaded into every Ollama chat call: bounded output +
 # context window and a low temperature for grounded answers.
 GEN_OPTIONS = {
-    "num_predict":    512,   # was 200 — full paragraph answers
-    "num_ctx":       4096,   # was 3072 — more room for retrieved chunks
+    "num_predict":    640,   # was 200, then 512 — room for fuller, fact-complete answers
+    "num_ctx":       6144,   # was 3072, then 4096 — headroom for TOP_K_FAST=6 + linked chunks
     "temperature":    0.2,   # tighter citation adherence
     "repeat_penalty": 1.1,   # prevent looping on long outputs
     "num_gpu":        999,   # all layers on GPU, no CPU offload
@@ -89,7 +89,7 @@ def _keep_alive(model):
 
 # Retrieval depth per tier: fast stays lean for speed, deep pulls more context
 # for grounding. handle_question does its own tiered retrieval inline.
-TOP_K_FAST = 4   # was 3
+TOP_K_FAST = 6   # was 3, then 4 — deeper retrieval so more rubric facts are in context
 TOP_K_DEEP = 8   # was 6
 
 # Retrieval section boost: when a query names a top-level vault folder
@@ -634,9 +634,11 @@ DOC_SYSTEM = (
 
 NO_WEB_SYSTEM = (
     "You are a careful research assistant grounded in a local thesis vault. "
-    "Web search is disabled, so answer the question as best you can from the "
-    "vault snippets provided and your own knowledge. Cite vault sources by "
-    "filename when you use them, and note plainly if you are unsure."
+    "Web search is disabled, so answer the question as fully as the vault "
+    "snippets allow, covering every relevant point and naming the specific "
+    "scholars, articles, and terms that appear in the snippets. Cite vault "
+    "sources by filename when you use them, aim for about 5 to 8 sentences, "
+    "and note plainly if you are unsure."
 )
 
 # Phase 1: the vault is ALWAYS consulted for an answer first. The model may only
@@ -659,7 +661,11 @@ VAULT_FIRST_SYSTEM = (
     "discuss the topic but lack the exact fact asked for, state what the "
     "snippets DO support and say plainly that the specific detail is not in "
     "the vault. "
-    "Answer in 3 to 4 concise sentences. Use only the provided context."
+    "Answer thoroughly: cover every relevant point the snippets support, and "
+    "name the specific scholars, articles, terms, and definitions that appear "
+    "in them (for example a named researcher, a CRPD article number, or a "
+    "defined term) whenever the snippets provide them. Aim for a clear, well "
+    "organized answer of about 5 to 8 sentences. Use only the provided context."
 )
 
 
@@ -1260,6 +1266,25 @@ def main():
     if cache is None:
         cache_enabled = False
 
+    # Semantic concept-router: widens coverage past the keyword cache's lexical
+    # match (a long natural question rarely shares enough content words with a
+    # short seeded phrase to hit the Jaccard cache, but it embeds close to the
+    # right concept). Optional and self-degrading: if prime_cache/semantic_cache
+    # or the embedding model are unavailable it stays None and the brain just
+    # uses RAG. The margin gate (0.08) keeps it from serving an adjacent concept
+    # on an ambiguous question; those fall through to a fresh grounded answer.
+    semantic = None
+    try:
+        from semantic_cache import SemanticCache
+        import prime_cache as _pc
+        semantic = SemanticCache(
+            _pc.KNOWLEDGE, host=OLLAMA_HOST, margin=0.08,
+            cache_path=os.path.join(CACHE_DIR, ".semantic_vecs.json"))
+        if not getattr(semantic, "ready", False):
+            semantic = None
+    except Exception:
+        semantic = None
+
     # Welcome banner (Claude Code style) or a plain header.
     cache_count = 0
     if cache is not None:
@@ -1387,6 +1412,28 @@ def main():
                 trim_history(history)
                 run.finish()
                 continue
+            # Keyword cache missed. Try the semantic concept-router before RAG:
+            # it serves a vetted concept answer when the question embeds close to
+            # exactly one concept, otherwise returns None and we compute fresh.
+            if semantic is not None:
+                try:
+                    m = semantic.match(question)
+                except Exception:
+                    m = None
+                if m and (m.get("answer") or "").strip():
+                    sem_answer = m["answer"]
+                    run.done("cache", "semantic hit · %s (cos %.2f)" % (
+                        m.get("concept", ""), m.get("score", 0.0)))
+                    for k in ("bm25", "expand", "model", "web"):
+                        run.skip(k, "semantic hit")
+                    sink = run.begin_answer()
+                    sink(sem_answer)
+                    run.sources(m.get("sources") or [], vault_name=VAULT_NAME)
+                    history.append({"role": "user", "content": question})
+                    history.append({"role": "assistant", "content": sem_answer})
+                    trim_history(history)
+                    run.finish()
+                    continue
             run.done("cache", "miss · computing fresh")
         else:
             run.skip("cache", "bypassed for /deep" if deep_once

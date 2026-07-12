@@ -93,9 +93,10 @@ class Brain:
     """Loads the index once and answers a question the way the app does:
     cache first (unless disabled), then vault retrieval and the model."""
 
-    def __init__(self, model, cache_dir, use_cache, web_enabled):
+    def __init__(self, model, cache_dir, use_cache, web_enabled, semantic=None):
         self.model = model
         self.web_enabled = web_enabled
+        self.semantic = semantic  # optional SemanticCache, or None
         # load_index() calls sys.exit() (SystemExit) when the index is missing
         # or corrupt. Catch that here so ready() can report False and main()
         # surfaces the documented exit-4 message instead of dying mid-init.
@@ -125,6 +126,15 @@ class Brain:
                 ans = hit.get("answer", "") or ""
                 if ans.strip():
                     return ans, (hit.get("sources") or []), "cache"
+        # Semantic concept-router: widens coverage past lexical overlap. Only
+        # fires on a confident, unambiguous match; otherwise falls through to RAG.
+        if self.semantic is not None:
+            try:
+                m = self.semantic.match(question)
+            except Exception:
+                m = None
+            if m and (m.get("answer") or "").strip():
+                return m["answer"], (m.get("sources") or []), "semantic"
         # Fresh retrieval plus model.
         try:
             answer, sources = brain.handle_question(
@@ -467,6 +477,13 @@ def build_parser():
     p.add_argument("--threshold", type=int, default=PASS_THRESHOLD, help="pass score")
     p.add_argument("--cache-dir", default=CACHE_DIR, help="answer cache dir")
     p.add_argument("--no-cache", action="store_true", help="force fresh RAG, ignore cache")
+    p.add_argument("--two-phase", action="store_true",
+                   help="answer all, then judge all (one model load per phase; fast on 8GB)")
+    p.add_argument("--semantic", action="store_true",
+                   help="enable the embedding concept-router (widens coverage past lexical match)")
+    p.add_argument("--embed-model", default="nomic-embed-text", help="embedding model for --semantic")
+    p.add_argument("--sem-threshold", type=float, default=0.70, help="min top cosine to serve semantically")
+    p.add_argument("--sem-margin", type=float, default=0.06, help="min top-over-2nd margin to serve semantically")
     p.add_argument("--web", action="store_true", help="allow web fallback (default off)")
     p.add_argument("--host", default=OLLAMA_HOST, help="Ollama host")
     p.add_argument("--only", action="append", default=None, metavar="ID",
@@ -500,8 +517,28 @@ def main():
             print("  - " + g["id"] + ": " + g["question"][:72])
         return 0
 
+    # Optional semantic concept-router (widens coverage past lexical overlap).
+    semantic = None
+    if args.semantic:
+        try:
+            from semantic_cache import SemanticCache
+            import prime_cache
+            semantic = SemanticCache(
+                prime_cache.KNOWLEDGE, host=args.host, model=args.embed_model,
+                threshold=args.sem_threshold, margin=args.sem_margin,
+                cache_path=os.path.join(SCRIPT_DIR, ".semantic_vecs.json"))
+            if not semantic.ready:
+                sys.stderr.write("semantic router unavailable (embeddings failed); using RAG only\n")
+                semantic = None
+            elif not args.as_json:
+                print("semantic router ready: %d concepts, threshold %.2f, margin %.2f"
+                      % (len(semantic.ids), args.sem_threshold, args.sem_margin))
+        except Exception as e:
+            sys.stderr.write("could not build semantic router: " + repr(e) + "\n")
+            semantic = None
+
     # Load the brain (index must exist).
-    the_brain = Brain(args.model, args.cache_dir, not args.no_cache, args.web)
+    the_brain = Brain(args.model, args.cache_dir, not args.no_cache, args.web, semantic)
     if not the_brain.ready():
         sys.stderr.write(
             "the vault index is not loaded. Run build_index.py first "
@@ -518,29 +555,53 @@ def main():
     if not args.as_json:
         print("Grading " + str(len(gold)) + " question(s). Answer then judge, one at a time.")
 
-    results = []
-    for i, g in enumerate(gold, 1):
-        answer, sources, served_by = the_brain.ask(g["question"])
+    def run_judge(g, answer):
         if args.isolate:
-            score, missing, errors, _raw = judge_isolated(
+            return judge_isolated(
                 g["question"], answer, g.get("must_cover", []), g.get("must_not", []),
-                args.judge_model, args.host, args.retries, args.timeout,
-            )
-        else:
-            score, missing, errors, _raw = judge(
-                g["question"], answer, g.get("must_cover", []), g.get("must_not", []),
-                args.judge_model, args.host, args.retries, args.timeout, args.judge_votes,
-            )
-        results.append({
-            "id": g["id"], "question": g["question"], "score": score,
-            "served_by": served_by, "missing": missing, "errors": errors,
-            "answer_preview": (answer or "")[:200],
-            "n_sources": len(sources or []),
-        })
+                args.judge_model, args.host, args.retries, args.timeout)
+        return judge(
+            g["question"], answer, g.get("must_cover", []), g.get("must_not", []),
+            args.judge_model, args.host, args.retries, args.timeout, args.judge_votes)
+
+    results = []
+    if args.two_phase:
+        # Phase 1: answer everything (answerer model stays resident), then Phase 2:
+        # judge everything (judge model stays resident). One model load per phase
+        # instead of a 3B<->judge swap on every question, which on an 8GB board that
+        # cannot hold both models is the dominant cost of a --no-cache run.
         if not args.as_json:
-            tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
-            print("  [%2d/%2d] %-6s %4s  %s" % (
-                i, len(gold), tag, ("n/a" if score < 0 else str(score)), g["id"]))
+            print("Two-phase: answering all, then judging all (avoids model swapping).")
+        answered = []
+        for i, g in enumerate(gold, 1):
+            answer, sources, served_by = the_brain.ask(g["question"])
+            answered.append((g, answer, sources, served_by))
+            if not args.as_json:
+                print("  answered [%2d/%2d] %-8s %s" % (i, len(gold), served_by, g["id"]))
+        for i, (g, answer, sources, served_by) in enumerate(answered, 1):
+            score, missing, errors, _raw = run_judge(g, answer)
+            results.append({
+                "id": g["id"], "question": g["question"], "score": score,
+                "served_by": served_by, "missing": missing, "errors": errors,
+                "answer_preview": (answer or "")[:200], "n_sources": len(sources or []),
+            })
+            if not args.as_json:
+                tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
+                print("  judged [%2d/%2d] %-6s %4s  %s" % (
+                    i, len(gold), tag, ("n/a" if score < 0 else str(score)), g["id"]))
+    else:
+        for i, g in enumerate(gold, 1):
+            answer, sources, served_by = the_brain.ask(g["question"])
+            score, missing, errors, _raw = run_judge(g, answer)
+            results.append({
+                "id": g["id"], "question": g["question"], "score": score,
+                "served_by": served_by, "missing": missing, "errors": errors,
+                "answer_preview": (answer or "")[:200], "n_sources": len(sources or []),
+            })
+            if not args.as_json:
+                tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
+                print("  [%2d/%2d] %-6s %4s  %s" % (
+                    i, len(gold), tag, ("n/a" if score < 0 else str(score)), g["id"]))
 
     elapsed = time.time() - start
     failed = [r for r in results if r["score"] < args.threshold]
