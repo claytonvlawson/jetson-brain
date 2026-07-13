@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py prime_cache.py eval_brain.py gold_questions.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py prime_cache.py eval_brain.py gold_questions.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh brain_web.py brain-web.sh brain-web.service; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -94,11 +94,14 @@ scp -q \
   "${HERE}/jetson-menu.sh" \
   "${HERE}/advisor_server.py" \
   "${HERE}/advisor-funnel-jetson.sh" \
+  "${HERE}/brain_web.py" \
+  "${HERE}/brain-web.sh" \
+  "${HERE}/brain-web.service" \
   "${JETSON}:${REMOTE}/"
 
 # ---- Make scripts executable and install --------------------------------
 echo "==> Marking scripts executable and running install.sh on the Jetson ..."
-ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '${REMOTE}/jetson-wifi.sh' '${REMOTE}/asl-mac.sh' '${REMOTE}/jetson-menu.sh' '${REMOTE}/advisor-funnel-jetson.sh' && bash '${REMOTE}/install.sh'"
+ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '${REMOTE}/jetson-wifi.sh' '${REMOTE}/asl-mac.sh' '${REMOTE}/jetson-menu.sh' '${REMOTE}/advisor-funnel-jetson.sh' '${REMOTE}/brain-web.sh' '${REMOTE}/brain_web.py' && bash '${REMOTE}/install.sh'"
 
 # ---- Done ---------------------------------------------------------------
 cat <<EOF
@@ -123,6 +126,13 @@ Next steps:
        bash ${REMOTE}/jetson-wifi.sh "YourSSID"
      WiFi becomes the primary path (route metric 100); the USB-C link stays a
      metric-700 fallback. Check anytime with: bash ${REMOTE}/jetson-wifi.sh --status
+
+  4. Phone web UI (open the brain in Safari from your iPhone over Tailscale):
+       ssh ${JETSON}
+       sudo bash ${REMOTE}/brain-web.sh setup
+     Installs a boot service (brain_web.py on 127.0.0.1:8899) and exposes it
+     tailnet-only over HTTPS via 'tailscale serve'. Prints the https URL to open.
+     Status/URL: bash ${REMOTE}/brain-web.sh status
 
 DEPLOY OK: ${MD_COUNT} md files, code + install pushed to ${JETSON}:${REMOTE}
 EOF

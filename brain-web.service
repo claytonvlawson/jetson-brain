@@ -1,0 +1,20 @@
+[Unit]
+Description=Jetson brain phone web UI (RAG over the vault, tailnet-only via Tailscale Serve)
+Documentation=file:/mnt/nvme/brain/brain-web.sh
+# Ollama serves the models on localhost:11434; wait for it and the network.
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# MUST run as snowbeach: brain.py's deps are installed with `pip install --user`,
+# so root would not find them on the import path.
+User=snowbeach
+WorkingDirectory=/mnt/nvme/brain
+ExecStart=/usr/bin/python3 /mnt/nvme/brain/brain_web.py
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
