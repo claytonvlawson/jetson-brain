@@ -11,11 +11,15 @@ the answers and citations are identical.
                    -> {"answer": "...", "sources": [...], "model": "...", "ms": N}
     GET  /health   -> {"ok": true, "chunks": N, "fast": "...", "deep": "..."}
 
-Design (mirrors advisor_server.py):
+Design:
 - Zero extra dependencies (stdlib http.server); nothing new to install.
-- Binds 127.0.0.1 ONLY. It is never exposed directly. Reach it from your phone
-  through `tailscale serve` (tailnet-only, NOT Funnel) -- see brain-web.sh. That
-  keeps it private to your own devices with a real HTTPS cert.
+- Binding is set by BRAIN_WEB_HOST (default 127.0.0.1, a safe localhost default).
+  The systemd unit (brain-web.service) sets it to this node's Tailscale IP so a
+  phone on the tailnet opens http://<tailscale-ip>:8899/ directly -- no MagicDNS
+  and no `tailscale serve` (iOS Safari often will not resolve the .ts.net name).
+  A Tailscale IP is only routable inside your tailnet, so it stays private to
+  your own devices. (Prefer the clean https://<node>.<tailnet>.ts.net/ URL? Turn
+  on HTTPS certs for the tailnet and run `brain-web.sh serve-https`.)
 - One answer at a time: a single 8GB device, so a semaphore serializes inference
   and concurrent requests queue behind the in-flight answer instead of thrashing
   or OOM-ing the GPU. Past a timeout the caller gets a friendly 503. Page loads

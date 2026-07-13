@@ -1,9 +1,10 @@
 [Unit]
-Description=Jetson brain phone web UI (RAG over the vault, tailnet-only via Tailscale Serve)
+Description=Jetson brain phone web UI (RAG over the vault, bound to the Tailscale IP, tailnet-only)
 Documentation=file:/mnt/nvme/brain/brain-web.sh
-# Ollama serves the models on localhost:11434; wait for it and the network.
-After=network-online.target ollama.service
-Wants=network-online.target
+# Needs Ollama (models on localhost:11434) and tailscaled (for the tailnet IP we
+# bind to). Order after both; tailscaled must be up or the bind address is absent.
+After=network-online.target tailscaled.service ollama.service
+Wants=network-online.target tailscaled.service
 
 [Service]
 Type=simple
@@ -11,7 +12,12 @@ Type=simple
 # so root would not find them on the import path.
 User=snowbeach
 WorkingDirectory=/mnt/nvme/brain
-ExecStart=/usr/bin/python3 /mnt/nvme/brain/brain_web.py
+# Wait until tailscaled has handed us an IPv4 tailnet address, then bind the
+# server to it so a phone on the tailnet reaches http://<tailscale-ip>:8899/
+# directly -- no MagicDNS and no `tailscale serve` (iOS Safari often will not
+# resolve the .ts.net name). Resolving at startup means it survives IP changes.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do /usr/bin/tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
+ExecStart=/bin/sh -c 'exec env BRAIN_WEB_HOST="$(/usr/bin/tailscale ip -4 | head -n1)" /usr/bin/python3 /mnt/nvme/brain/brain_web.py'
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=3
