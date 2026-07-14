@@ -24,3 +24,5 @@ answer_cache/
 
 # OS cruft
 .DS_Store
+
+advisor.env.local
