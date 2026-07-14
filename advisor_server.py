@@ -221,18 +221,24 @@ def citation_for(rel_source):
     # first one would render a misleading "View Source" for the whole note.
     if not url and full_citation:
         url = _first_body_url(body)
-    # Some source notes carry their citation as a `> [!type] Citation` callout
-    # rather than a `## Full citation` heading; fall back to it for the text so
-    # those notes read as a real citation instead of a bare title. No link is
-    # scraped from these (URL logic above is untouched), which is fine: they
-    # carry no DOI/URL of their own.
-    citation = full_citation or _extract_callout_citation(body) or title
-    return {"title": title, "citation": citation, "url": url, "doi": doi}
+    # A "real" citation is an actual academic reference carried by the note: a
+    # `## Full citation` heading or a `> [!type] Citation` callout. The bare
+    # title is only a last-resort fallback. Index/concept/core notes (e.g. "What
+    # Is Language Deprivation", "Key Papers") have neither and must NOT appear in
+    # the Sources list, so record whether a real citation was found;
+    # build_citations drops the ones without.
+    real = full_citation or _extract_callout_citation(body)
+    citation = real or title
+    return {"title": title, "citation": citation, "url": url, "doi": doi,
+            "has_citation": bool(real)}
 
 
 def build_citations(sources):
-    """Ordered, de-duplicated citations for the cited sources: url-bearing first
-    (so the clickable ones lead), then capped at MAX_CITATIONS."""
+    """Ordered, de-duplicated citations for the cited sources. Only notes that
+    carry a real academic citation (a `## Full citation` block or a
+    `> [!type] Citation` callout) are listed; index/concept/core notes that would
+    otherwise show as a bare title are dropped entirely. Url-bearing ones lead,
+    then capped at MAX_CITATIONS."""
     seen, resolved = set(), []
     for src in sources:
         key = str(src)
@@ -240,6 +246,7 @@ def build_citations(sources):
             continue
         seen.add(key)
         resolved.append(citation_for(key))
+    resolved = [c for c in resolved if c.get("has_citation")]
     with_url = [c for c in resolved if c["url"]]
     without = [c for c in resolved if not c["url"]]
     return (with_url + without)[:MAX_CITATIONS]
