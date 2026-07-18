@@ -98,6 +98,16 @@ TOP_K_DEEP = 8   # was 6
 # dense secondary notes that merely repeat the query terms more often.
 FOLDER_BOOST = 4.0
 
+# Parent persona: additive boost for the curated parent-guidance notes, so a
+# parent-mode question prefers the plain-language pathway notes over dense
+# academic sources that share more query words. Applied to BM25 scores before
+# fusion/rerank, so both retrieval paths inherit it.
+PARENT_BOOST = 3.0
+_PARENT_SOURCE_PREFIXES = (
+    "LanguageDeprivationAgent/Parent Guidance/",
+    "LanguageDeprivationAgent/Parents FAQ",
+)
+
 # Query-time semantic rerank of BM25 candidates. After BM25 + section boost, the
 # top hit is often a dense secondary note that merely repeats query words while
 # the canonical primary note sits a few ranks down. Reranking the top-N BM25
@@ -461,6 +471,22 @@ def _apply_section_boost(scores, chunks, qtok):
             if boosted is None:
                 boosted = list(scores)
             boosted[i] += FOLDER_BOOST
+    return boosted if boosted is not None else scores
+
+
+def _apply_parent_boost(scores, chunks):
+    """Add PARENT_BOOST to chunks from the curated parent-guidance notes.
+    Only called in parent persona; returns scores unchanged when nothing
+    matches (e.g. the vault has no parent notes)."""
+    if not len(scores):
+        return scores
+    boosted = None
+    for i, c in enumerate(chunks):
+        src = str(c.get("source") or "")
+        if src.startswith(_PARENT_SOURCE_PREFIXES):
+            if boosted is None:
+                boosted = list(scores)
+            boosted[i] += PARENT_BOOST
     return boosted if boosted is not None else scores
 
 
@@ -854,6 +880,40 @@ VAULT_FIRST_SYSTEM = (
     "organized answer of about 5 to 8 sentences. Use only the provided context."
 )
 
+# Parent persona: same grounding contract as VAULT_FIRST_SYSTEM (snippets-only,
+# filename citations, the exact bare INSUFFICIENT sentinel, no facts from model
+# memory) so _is_insufficient and faithfulness_flags work unchanged. Only the
+# register shifts: warm plain language for a hearing parent new to deafness,
+# Deaf-community-affirming framing, and concrete next steps.
+PARENT_SYSTEM = (
+    "You are a warm, knowledgeable guide for hearing parents who have just "
+    "learned their child is deaf, grounded in a local thesis vault. You are "
+    "given retrieved snippets from the vault, each labeled with its source "
+    "filename. Some snippets may be labeled '(linked)' because they come from "
+    "notes that the top notes link to.\n"
+    "Answer the question USING ONLY the vault snippets provided. Cite the "
+    "sources by filename when you use them.\n"
+    "If, and only if, the vault snippets do not contain enough information to "
+    "answer the question, reply with EXACTLY the single word INSUFFICIENT and "
+    "nothing else. Do not guess, do not use outside knowledge, and do not "
+    "mention the web. Only emit INSUFFICIENT when the vault genuinely cannot "
+    "answer; if the snippets let you answer even partially, answer instead. "
+    "Never supply article numbers, statutes, dates, statistics, author-year "
+    "citations, filenames, or URLs from your own memory: include such "
+    "specifics ONLY if they appear verbatim in the snippets.\n"
+    "Speak to the parent directly and plainly. Explain any technical term the "
+    "first time you use it. Never shame or blame a parent for past choices; "
+    "treat every question as a fresh start and say plainly when it is not too "
+    "late to act. Follow the Deaf-community-affirming framing in the "
+    "snippets: deafness is a difference with its own language and community, "
+    "not only a medical problem, and early access to sign language protects a "
+    "child's development without harming speech. When the snippets name "
+    "organizations, programs, schools, or next steps, close with the concrete "
+    "actions the parent can take, citing the source filenames. Aim for a "
+    "clear, warm answer of about 5 to 9 sentences. Use only the provided "
+    "context."
+)
+
 
 # Free-form refusals a small model emits INSTEAD of the exact INSUFFICIENT
 # sentinel that VAULT_FIRST_SYSTEM asks for. llama3.2:3b cannot be reliably
@@ -1189,11 +1249,15 @@ def _answer_from_excerpts(model, question, excerpts, history, run):
     return _finish(run, history, question, answer, [u for u, _ in excerpts])
 
 
-def handle_question(model, question, history, bm25, chunks, meta, web_enabled, run):
+def handle_question(model, question, history, bm25, chunks, meta, web_enabled, run,
+                    persona="default"):
     """Route a single question and stream the final answer through the run's UI.
     Updates history and returns (answer_text, sources_list). On error paths
     returns ("", []). `run` drives the ultracode-style progress tree; it always
-    exists (it degrades to plain output when stdout is not a TTY)."""
+    exists (it degrades to plain output when stdout is not a TTY).
+    persona="parent" answers in the warm parent-guidance register (PARENT_SYSTEM)
+    and boosts the curated parent-guidance notes in retrieval; grounding rules
+    are identical to the default persona."""
     # --- Retrieval: BM25 scoring -----------------------------------------
     run.running("bm25")
     qtok = query_tokens(question)
@@ -1202,6 +1266,8 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     except Exception:
         scores = []
     scores = _apply_section_boost(scores, chunks, qtok)
+    if persona == "parent":
+        scores = _apply_parent_boost(scores, chunks)
 
     retrieved = []
     top_score = 0.0
@@ -1264,7 +1330,8 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     # made the small model leave the vault for the web on questions the vault
     # answers well -- slower and less grounded.)
     run.running("model")
-    vault_messages = [{"role": "system", "content": VAULT_FIRST_SYSTEM}]
+    system_prompt = PARENT_SYSTEM if persona == "parent" else VAULT_FIRST_SYSTEM
+    vault_messages = [{"role": "system", "content": system_prompt}]
     vault_messages.extend(history)
     vault_messages.append(
         {"role": "user", "content": build_first_pass_user(
@@ -1371,6 +1438,8 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
 # ---------------------------------------------------------------------------
 HELP_TEXT = """Commands:
   /deep <q>      re-ask one question with the deep 7B model (slower, more grounded)
+  /parent <q>    answer one question in parent mode (warm, plain-language,
+                 Deaf-community-affirming guidance for parents of deaf children)
   /model         re-pick the model
   /web on|off    allow / disallow web search
   /cache         show the knowledge-bank stats (entries, reuses, balance, size)
@@ -1527,6 +1596,7 @@ def main():
 
         # Per-question tier: default fast; "/deep <q>" escalates to the deep model.
         deep_once = False
+        parent_once = False
 
         # Commands.
         if question in ("/exit", "/quit"):
@@ -1586,6 +1656,14 @@ def main():
                 continue
             question = rest
             deep_once = True
+        elif question == "/parent" or question.startswith("/parent "):
+            rest = question[len("/parent"):].strip()
+            if not rest:
+                print("Usage: /parent <question>  (warm, plain-language "
+                      "guidance for parents of deaf children)")
+                continue
+            question = rest
+            parent_once = True
         elif question.startswith("/"):
             print("Unknown command. Type /help for the list.")
             continue
@@ -1600,7 +1678,7 @@ def main():
 
         # Fast path: serve from the answer cache before retrieval or a model call.
         # Deep (/deep) answers bypass the cache so they never collide with a fast draft.
-        if cache_enabled and cache is not None and not deep_once:
+        if cache_enabled and cache is not None and not deep_once and not parent_once:
             try:
                 run.running("cache")
                 hit = cache.lookup(question)
@@ -1645,11 +1723,13 @@ def main():
             run.done("cache", "miss · computing fresh")
         else:
             run.skip("cache", "bypassed for /deep" if deep_once
-                     else "cache disabled")
+                     else ("bypassed for /parent" if parent_once
+                           else "cache disabled"))
 
         try:
             answer, sources = handle_question(
-                q_model, question, history, bm25, chunks, meta, web_enabled, run
+                q_model, question, history, bm25, chunks, meta, web_enabled, run,
+                persona="parent" if parent_once else "default"
             )
         except KeyboardInterrupt:
             run.finish()
@@ -1664,7 +1744,8 @@ def main():
 
         # Store fresh answers in the cache (triggers the storage-optimization
         # pass and compounds the knowledge bank).
-        if cache_enabled and cache is not None and answer and not deep_once:
+        if cache_enabled and cache is not None and answer and not deep_once \
+                and not parent_once:
             try:
                 cache.store(question, answer, sources, model)
             except Exception:

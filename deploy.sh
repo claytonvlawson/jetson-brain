@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py prime_cache.py eval_brain.py gold_questions.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py prime_cache.py eval_brain.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -82,6 +82,8 @@ scp -q \
   "${HERE}/prime_cache.py" \
   "${HERE}/eval_brain.py" \
   "${HERE}/gold_questions.jsonl" \
+  "${HERE}/heldout_gold.jsonl" \
+  "${HERE}/parent_gold.jsonl" \
   "${HERE}/install.sh" \
   "${HERE}/requirements.txt" \
   "${HERE}/jetson-online.sh" \

@@ -93,10 +93,12 @@ class Brain:
     """Loads the index once and answers a question the way the app does:
     cache first (unless disabled), then vault retrieval and the model."""
 
-    def __init__(self, model, cache_dir, use_cache, web_enabled, semantic=None):
+    def __init__(self, model, cache_dir, use_cache, web_enabled, semantic=None,
+                 persona="default"):
         self.model = model
         self.web_enabled = web_enabled
         self.semantic = semantic  # optional SemanticCache, or None
+        self.persona = persona    # "default" or "parent" (brain.PARENT_SYSTEM)
         # load_index() calls sys.exit() (SystemExit) when the index is missing
         # or corrupt. Catch that here so ready() can report False and main()
         # surfaces the documented exit-4 message instead of dying mid-init.
@@ -140,6 +142,7 @@ class Brain:
             answer, sources = brain.handle_question(
                 self.model, question, [], self.bm25, self.chunks,
                 self.meta, self.web_enabled, _SilentRun(),
+                persona=self.persona,
             )
             return (answer or ""), (sources or []), "rag"
         except Exception as e:
@@ -495,6 +498,8 @@ def build_parser():
     p.add_argument("--timeout", type=int, default=180, help="per-call timeout seconds")
     p.add_argument("--dry-run", action="store_true", help="list the plan, grade nothing")
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON report")
+    p.add_argument("--mode", choices=("default", "parent"), default="default",
+                   help="answer persona: parent = warm parent-guidance register")
     return p
 
 
@@ -538,7 +543,8 @@ def main():
             semantic = None
 
     # Load the brain (index must exist).
-    the_brain = Brain(args.model, args.cache_dir, not args.no_cache, args.web, semantic)
+    the_brain = Brain(args.model, args.cache_dir, not args.no_cache, args.web, semantic,
+                      persona=args.mode)
     if not the_brain.ready():
         sys.stderr.write(
             "the vault index is not loaded. Run build_index.py first "

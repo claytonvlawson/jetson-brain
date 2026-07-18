@@ -134,6 +134,7 @@ PAGE = r"""<!doctype html>
     <div class="toggles">
       <label><input type="checkbox" id="web"> Web search</label>
       <label><input type="checkbox" id="deep"> Deep model (slower)</label>
+      <label><input type="checkbox" id="parent"> Parent mode</label>
     </div>
   </form>
 <script>
@@ -141,7 +142,8 @@ PAGE = r"""<!doctype html>
   var log=document.getElementById('log'), f=document.getElementById('f'),
       q=document.getElementById('q'), send=document.getElementById('send'),
       sub=document.getElementById('sub'), hint=document.getElementById('hint'),
-      web=document.getElementById('web'), deep=document.getElementById('deep');
+      web=document.getElementById('web'), deep=document.getElementById('deep'),
+      parent=document.getElementById('parent');
   var busy=false;
 
   function scroll(){ log.scrollTop=log.scrollHeight; }
@@ -187,7 +189,8 @@ PAGE = r"""<!doctype html>
     var timer=setInterval(function(){ label.textContent='thinking... '+((Date.now()-t0)/1000).toFixed(0)+'s'; },1000);
 
     fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({question:text, web:web.checked, deep:deep.checked})})
+      body:JSON.stringify({question:text, web:web.checked, deep:deep.checked,
+      parent:parent.checked})})
     .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,status:r.status,j:j}; }); })
     .then(function(res){
       clearInterval(timer); think.remove();
@@ -271,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
             question = str(data.get("question", "")).strip()
             web = bool(data.get("web", False))
             deep = bool(data.get("deep", False))
+            parent = bool(data.get("parent", False))
         except Exception:
             return self._send(400, {"error": "invalid json"})
 
@@ -286,7 +290,8 @@ class Handler(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             answer, sources = brain.handle_question(
-                model, question, [], BM25, CHUNKS, META, web, brain._NullRun())
+                model, question, [], BM25, CHUNKS, META, web, brain._NullRun(),
+                persona="parent" if parent else "default")
         except Exception as exc:  # never let one bad question take the server down
             print("[brain_web] error:", exc, flush=True)
             return self._send(502, {"error": "The brain hit an error answering that."})
