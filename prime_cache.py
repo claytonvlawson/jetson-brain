@@ -1480,3 +1480,174 @@ if __name__ == "__main__":
         except Exception:
             pass
         sys.exit(1)
+
+
+# --- Parent-resource concepts (2026-07-18): grounded in the vault content
+# pack (EHDI, IFSP, Clerc Center, NDC) and the re-verified MSD note; authored
+# and adversarially verified against the notes. maryland_school_deaf is
+# refreshed in place (HB1052 board change, verified Sun commentary).
+_PARENT_ENTRIES = [
+    {
+        "id": "ehdi_early_intervention",
+        "canonical_question": "EHDI newborn hearing screening 1-3-6 benchmarks track audiology follow-up, not language outcomes",
+        "answer": "EHDI stands for Early Hearing Detection and Intervention. It is the United States system behind the hearing screening every newborn receives, and every state and territory runs a program. About 2 to 3 of every 1,000 babies are born deaf or hard of hearing, and more than 90 percent of them are born to hearing parents, so for most families that screening result is their first experience with deafness. The timeline you will hear is called 1-3-6: screening completed by 1 month, a full audiologic diagnosis by 3 months, and enrollment in early intervention by 6 months. It comes from the Joint Committee on Infant Hearing, and the committee itself says the goal is language competence, in spoken language, signed language, or both.\n\nNow the limitation I want every parent to understand. Every EHDI benchmark measures audiological process: screened, diagnosed, enrolled. None of them measures whether your child is actually acquiring language. A child can hit 1, 3, and 6 right on time and still grow up language deprived if what follows enrollment is not accessible language. Wyatte Hall's research puts it plainly: language deprivation, not hearing loss itself, is the central risk to a deaf child's development, and a cochlear implant is not a reliable standalone first-language intervention.\n\nSo use EHDI and hold it to its deadlines. Then go further. Ask your early intervention program, in writing, how they will track your child's language milestones in both ASL and English. Ask for a Deaf mentor for your family. EHDI counts enrollment. You must count language.",
+        "keyword_variants": [
+            "EHDI 1-3-6 benchmarks explained",
+            "my newborn failed the hearing screening at the hospital, what happens next?",
+            "what does Early Hearing Detection and Intervention actually track",
+            "newborn hearing screening timeline 1 month 3 months 6 months",
+            "does the EHDI system measure language outcomes or just audiology follow-up",
+            "baby got a refer result on the hospital hearing test, what is the 1-3-6 timeline",
+            "Joint Committee on Infant Hearing position statement benchmarks",
+            "can a baby meet every EHDI benchmark on time and still fall behind in language",
+            "what should I ask my state EHDI program and early intervention after a failed newborn screen",
+            "lost to follow-up after newborn hearing screening diagnosis stage",
+            "newborn hearing screen refer what do parents do next",
+            "EHDI enrollment by 6 months but nobody is tracking my baby's language milestones",
+            "JCIH 1-3-6 versus 1-2-3 timeline",
+            "is passing the newborn hearing screening milestones enough for my deaf baby",
+            "how the US newborn hearing screening system works state EHDI programs"
+        ],
+        "sources": [
+            "EHDI Early Hearing Detection and Intervention",
+            "What Is Language Deprivation",
+            "First 90 Days After Diagnosis"
+        ]
+    },
+    {
+        "id": "ifsp_part_c_early_intervention",
+        "canonical_question": "What is an IFSP, and what should a family of a deaf baby ask for in IDEA Part C birth-to-three early intervention?",
+        "answer": "When your baby is identified as deaf, the law is already on your side. Part C of IDEA gives every family a right to early intervention from birth until the third birthday, and the plan that drives it all is called an IFSP, the Individualized Family Service Plan. The clock moves fast on purpose: from referral, the evaluation, the assessments, and the first IFSP meeting must be completed within 45 days.\n\nAn IFSP is not an IEP. An IEP is a school-based education plan that begins at age three. An IFSP is family-centered. It includes outcomes for your family as well as your child, and most services happen in your own home. The written plan must spell out your child's present levels of development, measurable outcomes with criteria and timelines, and each service with its frequency and intensity, and it must be reviewed at least every six months.\n\nYou are a required member of the team, with rights to prior written notice, informed consent, and dispute options if the program says no. So put your requests in the plan, in writing. Ask for ASL instruction for your whole family as family training. Ask for a Deaf mentor: a Deaf adult, fluent in ASL, who visits your home, teaches sign in daily routines, and shares Deaf culture. Ask for early interventionists with real experience with deaf infants, not generic providers. And make language the headline outcome, in ASL, spoken English, or both. Children in bilingual-bicultural programming like this showed considerably larger vocabularies and stronger language.",
+        "keyword_variants": [
+            "what is an IFSP",
+            "IFSP vs IEP what is the difference",
+            "IDEA Part C early intervention for a deaf baby",
+            "birth to three services for my deaf child",
+            "what to ask for at the IFSP meeting",
+            "can early intervention pay for ASL classes for my family",
+            "getting a Deaf mentor in my baby's early intervention plan",
+            "my baby did not pass the hearing screening what services come next",
+            "45 day timeline after early intervention referral",
+            "our rights if the early intervention program refuses a service",
+            "Individualized Family Service Plan explained for parents",
+            "what happens when Part C ends at age 3",
+            "early intervention providers who actually know deaf infants",
+            "how often is the IFSP reviewed"
+        ],
+        "sources": [
+            "IFSP and Part C Early Intervention",
+            "Finding Deaf Mentors and Community",
+            "EHDI Early Hearing Detection and Intervention"
+        ]
+    },
+    {
+        "id": "clerc_center",
+        "canonical_question": "What is the Laurent Clerc National Deaf Education Center, with its tuition-free KDES and MSSD demonstration schools and free national resources for families of deaf children?",
+        "answer": "The Laurent Clerc National Deaf Education Center, usually just called the Clerc Center, is the national center for deaf education, based at Gallaudet University in Washington, DC. It is federally funded under the Education of the Deaf Act, and its charge is national: developing and sharing what works in deaf education, and supporting the parents and professionals who serve deaf and hard of hearing children from birth to age 21. Its early intervention mission is plain: end language deprivation by making sure deaf babies have full access to both ASL and English from the start.\n\nThe center runs two tuition-free demonstration schools on the Gallaudet campus. Kendall Demonstration Elementary School, KDES, is an accredited day school serving children from birth through grade 8 in the DC metro area, beginning with a Parent-Infant Program. The Model Secondary School for the Deaf, MSSD, is an accredited residential high school for grades 9 through 12 that draws students from all 50 states and US territories.\n\nHere is the part many families miss: you do not need to live in DC, and your child does not need to be enrolled, to use the Clerc Center. Its national resources are free. A parent anywhere in the US can join Deaf Education Connections for family videos, toolkits, and research, use early intervention offerings like ASL classes, Deaf mentorship, and bilingual storybooks, get Odyssey magazine by mail at no cost, browse the summer camp listings, and point their local school district to the State and School Partnership program.",
+        "keyword_variants": [
+            "what is the Clerc Center",
+            "Laurent Clerc National Deaf Education Center",
+            "Kendall Demonstration Elementary School KDES",
+            "Model Secondary School for the Deaf MSSD",
+            "tuition free residential high school for deaf teens",
+            "federally funded national center for deaf education",
+            "free national resources for parents of a deaf child",
+            "Odyssey magazine free deaf education",
+            "Deaf Education Connections videos and toolkits for families",
+            "deaf high school my child can attend from anywhere in the country",
+            "Clerc Center early intervention resources for families",
+            "free sign language classes and Deaf mentors for parents just starting out",
+            "national program that coaches school districts on deaf education",
+            "summer camps for deaf and hard of hearing children"
+        ],
+        "sources": [
+            "Laurent Clerc National Deaf Education Center",
+            "Where to Find Help National Organizations"
+        ]
+    },
+    {
+        "id": "national_deaf_center",
+        "canonical_question": "What is the National Deaf Center, and what free national outcome data and transition planning resources does it offer deaf youth and their families?",
+        "answer": "The National Deaf Center on Postsecondary Outcomes, usually just called the National Deaf Center or NDC, is a federally funded center at the University of Texas at Austin, supported by the US Department of Education. Think of it as the national clearinghouse for what actually happens to deaf students after high school. Its mission is simple: Learn. Connect. Transform. Everything it offers is deaf-centered, evidence-based, and free, and it serves every US state and territory.\n\nNDC's data give families the long view. In 2024, 1.9 percent of people in the United States are deaf. Just over half of deaf people, 55.8 percent, have some college credit or a degree. Deaf youth ages 16 to 24 are disconnected from both school and work at a higher rate, 22.7 percent, than the national average of 12.6 percent. And deaf people who earn a college degree earn more, work more, and are more involved in their communities. An interactive dashboard lets you see figures for your own state.\n\nFor families, NDC offers free transition planning resources built around a student-led process: deaf youth set their own goals and learn their rights and how to request accommodations, often through the IEP or vocational rehabilitation. The Promoting #DeafSuccess family guide shows that family support and high expectations measurably raise the odds of success, and Deafverse, a free online game, lets deaf teens build self-advocacy skills. A Help Team answers individual questions at no cost.",
+        "keyword_variants": [
+            "what is the National Deaf Center",
+            "National Deaf Center on Postsecondary Outcomes",
+            "NDC University of Texas Austin deaf center",
+            "national data on deaf education and employment outcomes",
+            "statistics on deaf people going to college and getting jobs",
+            "what percent of deaf people have a college degree",
+            "deaf youth disconnected from school and work rates",
+            "transition planning for my deaf teenager after high school",
+            "free resources to help a deaf teen get ready for college and work",
+            "IEP transition meeting resources for deaf students",
+            "Deafverse game for deaf teens",
+            "Promoting DeafSuccess guide for families",
+            "help my deaf high schooler plan for life after graduation",
+            "free federal center for deaf student outcomes after high school"
+        ],
+        "sources": [
+            "National Deaf Center",
+            "Where to Find Help National Organizations"
+        ]
+    }
+]
+KNOWLEDGE.extend(_PARENT_ENTRIES)
+
+_MSD_REFRESH = {
+    "id": "maryland_school_deaf",
+    "canonical_question": "Maryland School for the Deaf helps a late-signing child with language gaps",
+    "answer": "The Maryland School for the Deaf runs two campuses, one in Frederick and one in Columbia, and on both ASL and English live side by side from the earliest grades. ASL is the primary language of instruction, not an accommodation, so a deaf child gets lessons, discussions, and all the incidental learning of a school day directly, without waiting on an interpreter. For a child who arrives late to sign, already carrying language gaps, that immersion is the remediation itself: surrounded by fluent Deaf teachers and signing peers, the child can still acquire a full first language. Deaf alumni return as Deaf teachers, and language and culture pass from Deaf staff and fluent signing peers to the young, an intergenerational thread that runs back through generations of alumni. MSD cites the national statistic that more than 95 percent of deaf and hard of hearing children are born to hearing families who do not sign; that is a nationwide figure, not a count of MSD's own families, and it is why the school's Family Education program teaches families ASL free of charge during the birth to five years, when brain development is at its most active. Governance now matches the mission: under House Bill 1052, Chapter 721, effective July 1, 2026, the Board of Trustees has thirteen members, at least seven of them deaf. A November 2025 Baltimore Sun guest commentary by Kelby Brick, Wyatte Hall, and Superintendent John Serrano calls MSD a safe harbor for these children. That is the quiet power of a school where every hand speaks.",
+    "keyword_variants": [
+        "relocating to Maryland, our late-signing seven-year-old has big language gaps",
+        "everyone steers us toward the Deaf school in Frederick over the local district",
+        "what specifically about that school helps a child who arrived with so little language",
+        "how does MSD help a deaf kid who showed up with almost no language finally catch up",
+        "Maryland School for the Deaf Frederick and Columbia campuses",
+        "MSD residential K-12 School for the Deaf, everyone signs all day",
+        "IEP placement: signing School for the Deaf versus local mainstream district",
+        "mainstream with an interpreter versus a School for the Deaf where teachers sign",
+        "illusion of inclusion, mainstreaming alone does not prevent language deprivation",
+        "IDEA Part B least restrictive environment misread for a language-deprived deaf child",
+        "signing environment with Deaf teachers, Deaf peers, and Deaf staff",
+        "language-rich School for the Deaf lets a late-exposed child catch up",
+        "is the state Deaf school in Frederick better than the mainstream program",
+        "residential day program placement for a deaf child with little first language",
+        "Maryland School for the Deaf",
+        "MSD Frederick",
+        "deaf school bilingual",
+        "language rich deaf school",
+        "residential deaf school",
+        "MSD ASL English",
+        "deaf boarding school Maryland",
+        "My son is deaf and everyone keeps telling me the state school up in Frederick would be better for his language than the mainstream program he's in now, but honestly, wouldn't surrounding him with only other deaf kids just hold him back?",
+        "I teach elementary students and I'm trying to understand the actual mechanism: what happens at MSD's Frederick and Columbia campuses that lets a deaf kid who showed up with almost no language finally start catching up?",
+        "MSD Columbia Maryland deaf campus",
+        "best deaf school in Maryland for my son",
+        "does the Maryland deaf school teach kids in sign",
+        "Frederick Maryland school for deaf children ASL",
+        "my daughter is deaf is a residential school in Maryland good",
+        "state school for the deaf Maryland worth it",
+        "Merryland school for the deaf frederick",
+        "how does MSD help kids who arrive with no language",
+        "teacher here curious how MSD runs bilingual instruction",
+        "deaf kids thrive at the Maryland school signing environment",
+        "is MSD a good place for language deprived deaf children",
+        "Maryland deaf school Deaf culture and deaf staff",
+        "should I send my deaf child to the Frederick campus",
+        "grad student researching the Maryland School for the Deaf bilingual model",
+        "public deaf school Maryland ASL and English in one classroom",
+        "MSD deaf mentors older students pass down culture",
+        "whats a language rich school for deaf children in MD",
+        "Maryland school deaf full communication access every teacher signs"
+    ],
+    "sources": [
+        "Maryland School for the Deaf",
+        "Bilingual Bimodal Protective Factors",
+        "Critical Period and Brain",
+        "American Sign Language"
+    ]
+}
+for _i, _e in enumerate(KNOWLEDGE):
+    if _e.get("id") == _MSD_REFRESH["id"]:
+        KNOWLEDGE[_i] = _MSD_REFRESH
+        break
