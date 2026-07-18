@@ -15,6 +15,7 @@ external reference URLs:
 """
 
 import argparse
+import array
 import os
 import pickle
 import re
@@ -40,6 +41,91 @@ CEIL_WORDS = 320         # sections larger than this get split (sentence-safe)
 
 # Cap on external URLs captured per note.
 MAX_URLS_PER_NOTE = 20
+
+# Optional dense-retrieval sidecar (see brain.py hybrid RRF). Built ONLY when
+# --embed is passed, so a plain build stays pure-stdlib and Ollama-independent.
+# Each chunk is embedded once with a local Ollama model and L2-normalized so the
+# query-time cosine is a plain dot product. Vectors live in the SAME pickle as
+# one flat float32 buffer (~4 bytes/float, ~12 MB for this vault) that loads with
+# or without numpy. The document embedding uses the chunk text verbatim (heading
+# breadcrumb included) with NO task prefix, to match brain.py's query embedding
+# and the existing rerank/router embed path exactly.
+DEFAULT_EMBED_MODEL = "nomic-embed-text"
+DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
+EMBED_DOC_CHARS = 2000    # truncate a very long chunk before embedding
+EMBED_TIMEOUT = 60        # generous: a cold model load on the Jetson is slow
+
+
+def _load_embed_fns():
+    # Prefer semantic_cache._embed/_normalize so index-time and query-time
+    # embeddings share ONE implementation (no silent preprocessing drift). Fall
+    # back to inline stdlib copies if semantic_cache is not importable, so
+    # build_index.py can still embed when run standalone.
+    try:
+        from semantic_cache import _embed, _normalize
+        return _embed, _normalize
+    except Exception:
+        import json as _json
+        import math as _math
+        import urllib.request as _url
+
+        def _embed(text, host, model, timeout):
+            try:
+                data = _json.dumps({"model": model, "prompt": text}).encode("utf-8")
+                req = _url.Request(
+                    host + "/api/embeddings", data=data,
+                    headers={"Content-Type": "application/json"}, method="POST")
+                with _url.urlopen(req, timeout=timeout) as resp:
+                    vec = _json.loads(resp.read().decode("utf-8")).get("embedding")
+                return vec if isinstance(vec, list) and vec else None
+            except Exception:
+                return None
+
+        def _normalize(vec):
+            n = _math.sqrt(sum(x * x for x in vec)) or 1.0
+            return [x / n for x in vec]
+
+        return _embed, _normalize
+
+
+def build_dense(chunks, model, host):
+    # Embed every chunk once and return a dense block, or None if embedding is
+    # not usable (Ollama down / model not pulled / mostly failing). Only
+    # successfully-embedded chunks get a row; a chunk that fails to embed is
+    # simply dense-invisible (BM25 still covers it), which keeps alignment
+    # trivial and never blocks the build.
+    embed, normalize = _load_embed_fns()
+    total = len(chunks)
+    print("Embedding %d chunks with %s (this runs on the Jetson GPU) ..." % (total, model))
+    ids = []
+    flat = array.array("f")
+    dim = None
+    failures = 0
+    for n, c in enumerate(chunks):
+        text = (c.get("text") or "")[:EMBED_DOC_CHARS]
+        vec = embed(text, host, model, EMBED_TIMEOUT)
+        if vec and dim is None:
+            dim = len(vec)
+        if not vec or len(vec) != dim:
+            failures += 1
+        else:
+            flat.extend(normalize(vec))
+            ids.append(c["id"])
+        if (n + 1) % 200 == 0:
+            print("  embedded %d/%d (%d failed)" % (n + 1, total, failures))
+
+    if dim is None or not ids:
+        print("WARNING: dense embedding produced no vectors. Is Ollama running and "
+              "is '%s' pulled? Skipping the dense block; the index stays BM25-only." % model)
+        return None
+    if failures > total * 0.5:
+        print("WARNING: over half of chunk embeddings failed (%d/%d). Skipping the "
+              "dense block so a half-built matrix is never shipped." % (failures, total))
+        return None
+    if failures:
+        print("NOTE: %d/%d chunks could not be embedded and are dense-invisible "
+              "(BM25 still retrieves them)." % (failures, total))
+    return {"model": model, "dim": dim, "ids": ids, "buf": flat}
 
 
 def _s_stem(w):
@@ -441,7 +527,8 @@ def extract_urls(text):
 _JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv"}
 
 
-def build(vault, out):
+def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
+          ollama_host=DEFAULT_OLLAMA_HOST):
     if not os.path.isdir(vault):
         print("ERROR: vault directory not found: %s" % vault)
         return 1
@@ -550,11 +637,19 @@ def build(vault, out):
         if resolved:
             links_out[source] = resolved
 
+    # Optional dense block for brain.py hybrid retrieval. Built last (after all
+    # chunks exist) and only when --embed is passed. A None result (Ollama down
+    # or mostly failing) leaves the index BM25-only and brain.py falls back to
+    # its BM25+rerank path, so the build never hard-fails on the embedder.
+    dense = build_dense(chunks, embed_model, ollama_host) if embed else None
+
     # 'tokenized' is intentionally omitted: it is fully derivable from each
     # chunk's text via tokenize(), so storing it roughly doubled the pickle.
-    # load_index() re-tokenizes at load. version bumped to 3 to signal this.
+    # load_index() re-tokenizes at load. version 4 signals an optional dense
+    # block may be present; brain.py reads it only when present, so a v3 (no
+    # dense) and a v4-without-dense index behave identically.
     index = {
-        "version": 3,
+        "version": 4,
         "tokenizer_version": TOKENIZER_VERSION,
         "chunks": chunks,
         "by_source": by_source,
@@ -562,6 +657,8 @@ def build(vault, out):
         "links_out": links_out,
         "urls_out": urls_out,
     }
+    if dense is not None:
+        index["dense"] = dense
 
     out_dir = os.path.dirname(out)
     if out_dir and not os.path.isdir(out_dir):
@@ -589,6 +686,12 @@ def build(vault, out):
     print("Link map keys:  %d" % len(link_map))
     print("Outgoing links: %d note(s), %d resolved link(s)" % (notes_with_links, total_links))
     print("Reference URLs: %d note(s), %d url(s)" % (notes_with_urls, total_urls))
+    if dense is not None:
+        dmb = len(dense["buf"]) * 4 / (1024.0 * 1024.0)
+        print("Dense vectors:  %d vec(s) x %d dims (%s, ~%.1f MB)" % (
+            len(dense["ids"]), dense["dim"], dense["model"], dmb))
+    elif embed:
+        print("Dense vectors:  NONE (embedding was requested but produced no usable block)")
     print("Output path:    %s" % out)
     print("Output size:    %d bytes (%.2f KB)" % (size_bytes, size_bytes / 1024.0))
     print("DONE: index build complete.")
@@ -603,8 +706,17 @@ def main():
                         help="Path to the vault directory of markdown files.")
     parser.add_argument("--out", default=DEFAULT_OUT,
                         help="Path to write the bm25.pkl index.")
+    parser.add_argument("--embed", action="store_true",
+                        help="Also embed every chunk (needs Ollama running) and "
+                             "store a dense block for brain.py hybrid retrieval.")
+    parser.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL,
+                        help="Ollama embedding model for --embed (default %(default)s). "
+                             "Must match brain.py's index dense model.")
+    parser.add_argument("--ollama-host", default=DEFAULT_OLLAMA_HOST,
+                        help="Ollama host for --embed (default %(default)s).")
     args = parser.parse_args()
-    return build(args.vault, args.out)
+    return build(args.vault, args.out, embed=args.embed,
+                 embed_model=args.embed_model, ollama_host=args.ollama_host)
 
 
 if __name__ == "__main__":

@@ -112,6 +112,24 @@ RERANK_TIMEOUT = 30
 _RERANK_VECS = {}            # chunk key -> normalized embedding (in-process memo)
 _RERANK_ENABLED = True       # flips False after a hard embed failure this run
 
+# ---- Hybrid dense + BM25 retrieval (Reciprocal Rank Fusion) ----------------
+# When the loaded index carries a dense block (build_index.py --embed), each
+# query is ALSO scored by GLOBAL embedding cosine over every chunk, and the BM25
+# ranking and the dense ranking are fused by RRF. This is a RECALL move: BM25
+# alone cannot surface a chunk that shares no query words (a lay-worded question
+# vs an academic note), and the query-time rerank only reorders BM25's shortlist,
+# so it cannot recover such a chunk either. Dense retrieval runs over the whole
+# corpus, so RRF can pull in the right note even with zero lexical overlap.
+#
+# Self-disabling: with no dense block, or if the query embed fails, or if
+# BRAIN_HYBRID=0, handle_question falls back to the exact BM25 + rerank path, so
+# an un-embedded index (and the A/B baseline) behaves precisely as before. The
+# env gate lets one dense index be measured both ways: BRAIN_HYBRID=0 vs =1.
+HYBRID_ENABLED = os.environ.get("BRAIN_HYBRID", "1") not in ("0", "false", "False", "no")
+RRF_K = 60          # standard RRF damping constant; larger flattens rank weighting
+RRF_POOL = 60       # fuse this many top docs from each ranker
+DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
+
 MAX_WEB_RESULTS = 5
 MAX_WEB_FETCH = 3
 WEB_FETCH_TIMEOUT = 8
@@ -371,7 +389,49 @@ def _build_meta(data, chunks):
         "links_out": links_out,
         "urls_out": urls_out,
         "by_id": by_id,
+        "dense": _prep_dense(data.get("dense"), chunks),
     }
+
+
+def _prep_dense(dense, chunks):
+    """Validate and prepare the pickle's dense block for query-time scoring.
+
+    Returns None (hybrid stays off) unless the block is well-formed: a model
+    name, a positive dim, an ids list, and a flat float32 buffer of exactly
+    len(ids)*dim floats. Maps each dense row to its chunk INDEX (position in
+    `chunks`) so scoring is symmetric with the BM25 score array. Builds a numpy
+    matrix when numpy is importable (one fast matvec per query); otherwise keeps
+    the raw buffer for a pure-Python dot-product fallback. Never raises."""
+    if not isinstance(dense, dict):
+        return None
+    try:
+        model = dense.get("model")
+        dim = int(dense.get("dim") or 0)
+        ids = dense.get("ids")
+        buf = dense.get("buf")
+        if not model or dim <= 0 or not ids or buf is None:
+            return None
+        n = len(ids)
+        if len(buf) != n * dim:
+            return None
+        idx_of_id = {}
+        for i, c in enumerate(chunks):
+            cid = c.get("id")
+            if cid is not None:
+                idx_of_id[cid] = i
+        rows_idx = [idx_of_id.get(cid, -1) for cid in ids]
+    except Exception:
+        return None
+
+    out = {"model": model, "dim": dim, "n": n, "rows_idx": rows_idx,
+           "matrix": None, "buf": None}
+    try:
+        import numpy as np
+        out["matrix"] = np.array(buf, dtype=np.float32).reshape(n, dim)
+    except Exception:
+        out["matrix"] = None
+        out["buf"] = buf   # array.array('f'); sliced per row in the fallback
+    return out
 
 
 # Folder-name token sets are memoized: the vault has a handful of top-level
@@ -447,6 +507,72 @@ def _rerank_by_embedding(question, chunks, cand_ids):
         return [i for _, i in scored]
     except Exception:
         return cand_ids
+
+
+def _dense_scores(question, chunks, meta):
+    """Global embedding-cosine score per chunk INDEX for hybrid retrieval.
+
+    Embeds the question once (same Ollama embed path as the router/rerank) with
+    the index's own dense model, then scores every chunk that has a dense vector
+    by cosine (a dot product, since both sides are L2-normalized). Returns a list
+    aligned to `chunks`: the cosine for chunks with a dense vector, -inf for
+    those without (so they sink in the dense ranking and are filtered from the
+    RRF pool). Returns None if there is no dense block or the query embed fails,
+    which makes handle_question fall back to the BM25 + rerank path. Never raises."""
+    dm = meta.get("dense")
+    if not dm:
+        return None
+    try:
+        from semantic_cache import _embed, _normalize, _dot
+    except Exception:
+        return None
+    try:
+        qvec = _embed(question, OLLAMA_HOST, dm["model"], DENSE_TIMEOUT)
+        if not qvec:
+            return None
+        qv = _normalize(qvec)
+        dim = dm["dim"]
+        if len(qv) != dim:
+            return None
+        n = dm["n"]
+        rows_idx = dm["rows_idx"]
+        scores = [float("-inf")] * len(chunks)
+        mat = dm.get("matrix")
+        if mat is not None:
+            import numpy as np
+            sims = mat @ np.array(qv, dtype=np.float32)   # (n,) cosine per row
+            for r in range(n):
+                ci = rows_idx[r]
+                if ci >= 0:
+                    scores[ci] = float(sims[r])
+        else:
+            buf = dm.get("buf")
+            if buf is None:
+                return None
+            for r in range(n):
+                ci = rows_idx[r]
+                if ci < 0:
+                    continue
+                base = r * dim
+                scores[ci] = _dot(qv, buf[base:base + dim])
+        return scores
+    except Exception:
+        return None
+
+
+def _rrf_fuse(rankings, k=RRF_K, pool=RRF_POOL):
+    """Reciprocal Rank Fusion of several ranked chunk-index lists.
+
+    Each ranker contributes 1/(k + rank) to the docs in its top `pool` (rank is
+    0-based, so the top doc contributes 1/(k+1)). A doc's fused score is the sum
+    across the rankers it appears in, so agreement between BM25 and dense is
+    rewarded while either alone can still lift a doc the other missed. Returns
+    the fused chunk indices sorted by descending score."""
+    agg = {}
+    for ranked in rankings:
+        for rank, idx in enumerate(ranked[:pool]):
+            agg[idx] = agg.get(idx, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(agg.keys(), key=lambda i: agg[i], reverse=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1079,14 +1205,32 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
 
     retrieved = []
     top_score = 0.0
+    mode = "bm25"
     if len(scores):
         ranked = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)
         keep_k = TOP_K_DEEP if model == DEEP_MODEL else TOP_K_FAST
-        # Candidate pool: the top BM25 hits with a positive score.
-        cand_ids = [i for i in ranked if scores[i] > 0][:RERANK_CAND_N]
-        # Semantic rerank the pool, then keep the top keep_k. Falls back to BM25
-        # order transparently when embeddings are unavailable.
-        order = _rerank_by_embedding(question, chunks, cand_ids)
+        order = None
+        # Hybrid path: fuse BM25 with GLOBAL dense retrieval via RRF. Only when a
+        # dense block is present, hybrid is enabled, and the query embed succeeds;
+        # otherwise order stays None and we take the BM25 + rerank path below.
+        if HYBRID_ENABLED and meta.get("dense"):
+            dscore = _dense_scores(question, chunks, meta)
+            if dscore is not None:
+                dense_ranked = sorted(range(len(chunks)),
+                                      key=lambda i: dscore[i], reverse=True)
+                # Lexical side contributes only positive-BM25 docs; dense side
+                # contributes its top pool regardless of lexical overlap (the
+                # recall win). RRF fuses the two rank lists.
+                bm25_pool = [i for i in ranked if scores[i] > 0][:RRF_POOL]
+                dense_pool = [i for i in dense_ranked
+                              if dscore[i] > float("-inf")][:RRF_POOL]
+                order = _rrf_fuse([bm25_pool, dense_pool])
+                mode = "hybrid"
+        if order is None:
+            # BM25 + query-time rerank (un-embedded index, hybrid off, or the
+            # embedder was unreachable). Identical to the pre-hybrid behavior.
+            cand_ids = [i for i in ranked if scores[i] > 0][:RERANK_CAND_N]
+            order = _rerank_by_embedding(question, chunks, cand_ids)
         for i in order[:keep_k]:
             retrieved.append(chunks[i])
         if ranked:
@@ -1095,8 +1239,8 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
             except Exception:
                 top_score = 0.0
     vsrc = vault_sources(retrieved)
-    run.done("bm25", "%d chunks · top score %.1f · %s" % (
-        len(retrieved), top_score, _short_srcs(vsrc)) if retrieved
+    run.done("bm25", "%d chunks · %s · top score %.1f · %s" % (
+        len(retrieved), mode, top_score, _short_srcs(vsrc)) if retrieved
         else "no lexical matches")
 
     # --- Retrieval: wikilink expansion -----------------------------------
