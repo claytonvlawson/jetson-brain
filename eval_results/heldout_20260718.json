@@ -1,0 +1,156 @@
+{
+  "gold": "heldout_gold.jsonl",
+  "model": "llama3.2:3b",
+  "judge": "qwen2.5:7b",
+  "threshold": 90,
+  "results": [
+    {
+      "id": "language_deprivation_h",
+      "question": "I sit on a state early-intervention advisory board, and a presenter called a deaf infant growing up without an accessible first language a 'public health issue.' Can you unpack why anyone would frame it in public-health terms, and what the downstream effects on a child actually look like?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Language deprivation is what happens when a deaf child lacks full, accessible language during the critical early period the brain is built for language development. The root cause is never the child's",
+      "n_sources": 3
+    },
+    {
+      "id": "critical_period_h",
+      "question": "In my developmental psychology class we discussed how the brain is primed for language early in life. For a deaf kid, how much does it genuinely matter whether that first real language arrives at age two versus age six, and whose research settled that question?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "As a Deaf man shaped by Gallaudet and Maryland School for the Deaf, let me be plain about this. Early in life the brain has a developmental window when language is acquired almost effortlessly, and th",
+      "n_sources": 3
+    },
+    {
+      "id": "asl_full_language_h",
+      "question": "I read somewhere that back in the 1960s a professor basically proved sign language has its own building blocks the way spoken words do. Who was that, what did he show, and does that really put ASL on the same footing as English?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Yes, without qualification. American Sign Language is a full, natural human language. It is not a manual code for English and not English acted out on the hands. Its phonology, morphology, and syntax ",
+      "n_sources": 3
+    },
+    {
+      "id": "bilingual_bimodal_h",
+      "question": "I'm helping design a program for deaf preschoolers and keep seeing the phrase 'additive bilingualism.' What does a two-language, two-modality approach involve day to day, and why do advocates like Grosjean argue a deaf child has a right to grow up with both languages?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Bilingual-bimodal education gives a deaf child two languages in two modalities: ASL received visually, through the eyes, and English through print, with speech added where it genuinely helps. The two ",
+      "n_sources": 3
+    },
+    {
+      "id": "deaf_gain_h",
+      "question": "At work we talk constantly about how different perspectives make a team stronger. Is there a comparable argument in Deaf studies that a signing, visually oriented community actually contributes something the wider world benefits from, rather than just needing to be accommodated?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Deaf gain flips the whole frame. Instead of asking what a deaf person lacks against a hearing norm, it asks what humanity gains from Deaf ways of being. The Deaf performance artist Aaron Williamson fi",
+      "n_sources": 3
+    },
+    {
+      "id": "crpd_language_rights_h",
+      "question": "I'm drafting an advocacy brief and want to cite the specific UN treaty provisions that back sign language. Which parts of the CRPD speak to language, expression, education, and cultural identity for Deaf people, and how does the literature connect them to real recognition?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "When people ask me whether a deaf child has a right to sign language, I point to binding international law: the United Nations Convention on the Rights of Persons with Disabilities, the CRPD, which ma",
+      "n_sources": 3
+    },
+    {
+      "id": "legal_recognition_h",
+      "question": "Two neighboring countries both say they 'recognize' their national sign language, yet Deaf people in one seem far better off than in the other. What differences in how recognition is written into law would explain that gap?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "When I talk about legal recognition, I mean far more than a law naming my sign language and calling the work done. As a Gallaudet alum who grew up at the Maryland School for the Deaf, I lean on Maartj",
+      "n_sources": 3
+    },
+    {
+      "id": "cochlear_implant_myth_h",
+      "question": "My grandson just got implanted and the surgeon said the operation basically 'takes care of' his deafness. That sits oddly with me. Does getting a cochlear implant really settle the whole question of how he'll learn language?",
+      "score": 83,
+      "served_by": "semantic",
+      "missing": [
+        "The most harmful myth is that once a child is implanted the language question is solved and sign becomes unnecessary"
+      ],
+      "errors": [],
+      "answer_preview": "No. As a Deaf person shaped by Gallaudet and the Maryland School for the Deaf, let me be plain. A cochlear implant can provide access to sound, but a device is not itself a language, and hearing sound",
+      "n_sources": 3
+    },
+    {
+      "id": "gallaudet_h",
+      "question": "A friend mentioned there was a major protest back in 1988 at a university for Deaf students that ended with their first Deaf president. Which university was that, what was the protest about, and why do people say it still matters?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Gallaudet University, located in Washington, D.C., is the only university in the world built from its very start for deaf and hard-of-hearing students. It was established in 1864 through a federal cha",
+      "n_sources": 3
+    },
+    {
+      "id": "maryland_school_deaf_h",
+      "question": "We're relocating to Maryland, and our late-signing seven-year-old has big language gaps. People keep steering us toward the Deaf school in Frederick over the local district. What specifically about that school helps a child who arrived with so little language?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The Maryland School for the Deaf runs two campuses, one in Frederick and one in Columbia, and on both ASL and English live side by side from the earliest grades. ASL is the primary language of instruc",
+      "n_sources": 4
+    },
+    {
+      "id": "deaf_community_transmission_h",
+      "question": "Here is something that genuinely puzzles me: if almost no Deaf children are born to signing parents, how has ASL managed to survive and be handed down at all from one generation to the next?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Most languages pass down parent-to-child in the home, but ASL usually does not, and the reason is simple: roughly ninety-five percent of deaf children are born to hearing parents who do not sign at bi",
+      "n_sources": 3
+    },
+    {
+      "id": "interpreting_access_h",
+      "question": "I manage a busy clinic, and when a Deaf patient comes in we sometimes ask their adult son to interpret or lean on a video app. Is that acceptable, and what does real communication access in a medical setting actually require?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Skilled, certified interpreters are essential, and they genuinely open doors that would otherwise stay shut. But booking one is not the same as full accessibility. Real access means a deaf person can ",
+      "n_sources": 3
+    },
+    {
+      "id": "deaf_identity_audism_h",
+      "question": "I'm editing an article and I'm unsure when to capitalize 'Deaf,' and one source used the word 'audism' about a school that banned signing. Can you clarify the capitalization rule and whether banning sign really counts as audism?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "When I write deaf with a lowercase d, I mean audiological or hearing status, how a body hears. When I write Deaf with a capital D, I name a cultural and linguistic identity: belonging to a signing com",
+      "n_sources": 3
+    },
+    {
+      "id": "deaf_world_visual_h",
+      "question": "I went to an ASL poetry night and was floored by how the performers used space, their whole bodies, and shifts in perspective. Is there a concept in Deaf studies that captures this idea that Deaf people experience and express the world visually as their own kind of community?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "We Deaf people describe ourselves as a visual people. Our sight organizes how we take in and structure experience, and it is a whole way of being, not a compensation or substitute for a missing sense.",
+      "n_sources": 3
+    }
+  ],
+  "passed": 13,
+  "failed": 1,
+  "judge_failures": 0,
+  "lowest": 83,
+  "all_pass": false,
+  "elapsed_seconds": 138.76
+}

@@ -1,0 +1,109 @@
+{
+  "gold": "parent_gold.jsonl",
+  "model": "llama3.2:3b",
+  "judge": "qwen2.5:7b",
+  "threshold": 90,
+  "results": [
+    {
+      "id": "parent_first_steps",
+      "question": "We just found out our baby is deaf. I am overwhelmed and I do not know where to start. What should we do first?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "I'm so sorry to hear that you're going through this. It's completely normal to feel overwhelmed, but there are concrete steps you can take right now.\n\nFirst and foremost, please start visible language",
+      "n_sources": 6
+    },
+    {
+      "id": "parent_ci_no_sign",
+      "question": "Our audiologist says our daughter should get a cochlear implant and that we should not sign with her so she focuses on listening. Is that right?",
+      "score": 80,
+      "served_by": "semantic",
+      "missing": [
+        "Bilingual-bimodal children with implants do as well as or better than implant-only children"
+      ],
+      "errors": [],
+      "answer_preview": "No. As a Deaf person shaped by Gallaudet and the Maryland School for the Deaf, let me be plain. A cochlear implant can provide access to sound, but a device is not itself a language, and hearing sound",
+      "n_sources": 3
+    },
+    {
+      "id": "parent_deaf_mentors",
+      "question": "People keep telling me my deaf son should know Deaf adults. Why does that matter, and how do we actually find Deaf mentors?",
+      "score": 75,
+      "served_by": "rag",
+      "missing": [
+        "Families can request Deaf mentor services through early intervention (the IFSP under IDEA Part C)"
+      ],
+      "errors": [],
+      "answer_preview": "It's wonderful that you're thinking about your child's connection to the Deaf community. Knowing Deaf adults matters because it provides a living example of Deaf adulthood, cultural transmission, iden",
+      "n_sources": 7
+    },
+    {
+      "id": "parent_ifsp",
+      "question": "Our early intervention coordinator keeps talking about an IFSP meeting for our deaf baby. What is an IFSP, and what should we ask for in it?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "When your baby is identified as deaf, the law is already on your side. Part C of IDEA gives every family a right to early intervention from birth until the third birthday, and the plan that drives it ",
+      "n_sources": 3
+    },
+    {
+      "id": "parent_sign_speech_myth",
+      "question": "My mother-in-law says that if we sign with our deaf toddler he will never learn to talk. Is there any truth to that?",
+      "score": 50,
+      "served_by": "rag",
+      "missing": [
+        "The claim comes from oralist advocacy traditions rather than from data",
+        "A full first language during the critical period benefits the child regardless of which language they later prefer"
+      ],
+      "errors": [],
+      "answer_preview": "Your concern is rooted in a common misconception about the relationship between signing and speaking. The idea that signing will hinder or prevent a child from learning to speak is not supported by ev",
+      "n_sources": 7
+    },
+    {
+      "id": "parent_school_options",
+      "question": "We are looking at school options for our deaf daughter. What does a school for the deaf actually offer that a mainstream classroom with an interpreter does not?",
+      "score": 60,
+      "served_by": "rag",
+      "missing": [
+        "Incidental and social learning throughout the school day, not just in lessons",
+        "Deaf schools pair ASL with English rather than rejecting speech or English literacy"
+      ],
+      "errors": [],
+      "answer_preview": "A school for the Deaf offers a language environment where your child can fully access and develop their first language, American Sign Language (ASL). This is in contrast to a mainstream classroom with",
+      "n_sources": 9
+    },
+    {
+      "id": "parent_late_start",
+      "question": "Our son is seven and we only started signing with him this year. I feel terrible that we waited. Is it too late for him?",
+      "score": 20,
+      "served_by": "rag",
+      "missing": [
+        "Language deprivation is usually the unintended outcome of well-intentioned choices, so the framing is forward-looking, not blaming",
+        "An immersive signing environment such as a Deaf school is the strongest remediation for a late start",
+        "Delayed language milestones are an emergency deserving immediate action, and acting now matters",
+        "Early exposure works best, so the family should escalate language access without delay"
+      ],
+      "errors": [],
+      "answer_preview": "It's never too late to start signing, even if you've been waiting a few years. The key is to make signing a daily habit now, not to be fluent right away. Most hearing parents of deaf children learn AS",
+      "n_sources": 7
+    },
+    {
+      "id": "parent_national_orgs",
+      "question": "Are there national organizations that help families like ours with a deaf child, and what does each one actually offer?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "There are several national organizations that can provide support to families of deaf children. \n\nThe National Association of the Deaf (NAD) is an organization that offers position statements on early",
+      "n_sources": 6
+    }
+  ],
+  "passed": 3,
+  "failed": 5,
+  "judge_failures": 0,
+  "lowest": 20,
+  "all_pass": false,
+  "elapsed_seconds": 440.08
+}

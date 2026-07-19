@@ -1,0 +1,13 @@
+# jetson-brain: run the web-knowledge refresh weekly, early Sunday morning.
+# Persistent=true catches up after a powered-off week. See brain-learn.service
+# for install commands.
+[Unit]
+Description=jetson-brain weekly web-knowledge refresh timer
+
+[Timer]
+OnCalendar=Sun 03:30
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

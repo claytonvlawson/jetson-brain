@@ -1,0 +1,94 @@
+{
+  "gold": "parent_gold.jsonl",
+  "model": "llama3.2:3b",
+  "judge": "qwen2.5:7b",
+  "threshold": 90,
+  "results": [
+    {
+      "id": "parent_first_steps",
+      "question": "We just found out our baby is deaf. I am overwhelmed and I do not know where to start. What should we do first?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Take a breath. What you are feeling is normal, and none of this is your fault: more than 90 percent of deaf babies are born to hearing parents, so nearly every family starts exactly where you are, wit",
+      "n_sources": 4
+    },
+    {
+      "id": "parent_ci_no_sign",
+      "question": "Our audiologist says our daughter should get a cochlear implant and that we should not sign with her so she focuses on listening. Is that right?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "No. As a Deaf person shaped by Gallaudet and the Maryland School for the Deaf, let me be plain. A cochlear implant can provide access to sound, but a device is not itself a language, and hearing sound",
+      "n_sources": 3
+    },
+    {
+      "id": "parent_deaf_mentors",
+      "question": "People keep telling me my deaf son should know Deaf adults. Why does that matter, and how do we actually find Deaf mentors?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Because you cannot be everything, and you do not have to be. Hearing parents who learn ASL are doing something wonderful, but while you are learning, your child also needs fluent language models, and ",
+      "n_sources": 3
+    },
+    {
+      "id": "parent_ifsp",
+      "question": "Our early intervention coordinator keeps talking about an IFSP meeting for our deaf baby. What is an IFSP, and what should we ask for in it?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "When your baby is identified as deaf, the law is already on your side. Part C of IDEA gives every family a right to early intervention from birth until the third birthday, and the plan that drives it ",
+      "n_sources": 3
+    },
+    {
+      "id": "parent_sign_speech_myth",
+      "question": "My mother-in-law says that if we sign with our deaf toddler he will never learn to talk. Is there any truth to that?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "No. This is one of the oldest and most damaging myths in deaf education, and the research does not support it. Study after study finds that early sign language exposure has either no effect on spoken-",
+      "n_sources": 3
+    },
+    {
+      "id": "parent_school_options",
+      "question": "We are looking at school options for our deaf daughter. What does a school for the deaf actually offer that a mainstream classroom with an interpreter does not?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The difference is direct access versus filtered access. In a mainstream classroom, everything your daughter gets passes through one interpreter: one voice at a time, a beat behind, during instruction.",
+      "n_sources": 3
+    },
+    {
+      "id": "parent_late_start",
+      "question": "Our son is seven and we only started signing with him this year. I feel terrible that we waited. Is it too late for him?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "No, it is not too late, and the fact that you are asking means your family is already moving. The research on late signers holds two truths at once: earlier is better, and later still helps. Deaf chil",
+      "n_sources": 4
+    },
+    {
+      "id": "parent_national_orgs",
+      "question": "Are there national organizations that help families like ours with a deaf child, and what does each one actually offer?",
+      "score": 100,
+      "served_by": "semantic",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Yes, and the good news is that the strongest ones are free to any family in the United States, whether or not your child is enrolled anywhere. Here is who they are and what each actually does.\n\nThe Na",
+      "n_sources": 4
+    }
+  ],
+  "passed": 8,
+  "failed": 0,
+  "judge_failures": 0,
+  "lowest": 100,
+  "all_pass": true,
+  "elapsed_seconds": 73.17
+}

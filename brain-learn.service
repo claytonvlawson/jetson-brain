@@ -1,0 +1,22 @@
+# jetson-brain: refresh stale web-learned knowledge, purge dead pages, and
+# fold the result back into the index (the running brain hot-reloads it).
+#
+# Install on the Jetson (sudo needs the password there):
+#   sudo cp /mnt/nvme/brain/brain-learn.service /etc/systemd/system/
+#   sudo cp /mnt/nvme/brain/brain-learn.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now brain-learn.timer
+# Check:
+#   systemctl list-timers brain-learn.timer
+#   journalctl -u brain-learn.service -n 50
+[Unit]
+Description=jetson-brain weekly web-knowledge refresh
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=snowbeach
+WorkingDirectory=/mnt/nvme/brain
+ExecStart=/usr/bin/python3 /mnt/nvme/brain/refresh_web.py --max-age-days 30
+Nice=10

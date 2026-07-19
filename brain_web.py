@@ -47,6 +47,7 @@ QUEUE_TIMEOUT = float(os.environ.get("BRAIN_WEB_QUEUE_TIMEOUT", "120"))  # deep 
 
 print("Loading the vault index...", flush=True)
 CHUNKS, BM25, META = brain.load_index()
+INDEX_MTIME = brain.index_mtime()
 print("Loaded %d chunks. fast=%s deep=%s" % (len(CHUNKS), FAST_MODEL, DEEP_MODEL), flush=True)
 
 # Single-flight: one grounded answer at a time on one device.
@@ -289,6 +290,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(503, {"error": "The brain is busy with another question. Try again in a moment."})
         t0 = time.time()
         try:
+            # Auto-learn hot-reload (safe here: the GPU lock makes this the
+            # only in-flight question, so swapping the globals cannot race a
+            # concurrent handle_question).
+            global CHUNKS, BM25, META, INDEX_MTIME
+            CHUNKS, BM25, META, INDEX_MTIME, _ = brain.maybe_reload_index(
+                CHUNKS, BM25, META, INDEX_MTIME)
             answer, sources = brain.handle_question(
                 model, question, [], BM25, CHUNKS, META, web, brain._NullRun(),
                 persona="parent" if parent else "default")

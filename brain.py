@@ -70,10 +70,18 @@ DEEP_MODEL = "qwen2.5:7b"
 GEN_OPTIONS = {
     "num_predict":    640,   # was 200, then 512 — room for fuller, fact-complete answers
     "num_ctx":       6144,   # was 3072, then 4096 — headroom for TOP_K_FAST=6 + linked chunks
-    "temperature":    0.2,   # tighter citation adherence
+    "temperature":    0.2,   # tighter citation adherence; BRAIN_TEMPERATURE overrides
     "repeat_penalty": 1.1,   # prevent looping on long outputs
     "num_gpu":        999,   # all layers on GPU, no CPU offload
 }
+
+# Eval reproducibility: BRAIN_TEMPERATURE=0 makes generation deterministic so
+# an A/B between two configs measures the change, not sampling noise. Unset
+# (production) keeps the 0.2 default above.
+try:
+    GEN_OPTIONS["temperature"] = float(os.environ["BRAIN_TEMPERATURE"])
+except (KeyError, ValueError):
+    pass
 
 # keep_alive per tier (8GB cannot hold both large models resident): the fast
 # model stays pinned (-1) for warm repeats; the deep 7B loads on demand and is
@@ -106,7 +114,26 @@ PARENT_BOOST = 3.0
 _PARENT_SOURCE_PREFIXES = (
     "LanguageDeprivationAgent/Parent Guidance/",
     "LanguageDeprivationAgent/Parents FAQ",
+    "LanguageDeprivationAgent/Local Resources DMV/",
+    "LanguageDeprivationAgent/Core/What Is Language Deprivation",
+    "Concepts/EHDI Early Hearing Detection and Intervention",
+    "Concepts/IFSP and Part C Early Intervention",
+    "Organizations/Laurent Clerc National Deaf Education Center",
+    "Organizations/Maryland School for the Deaf",
+    "Organizations/National Deaf Center",
 )
+
+# Parent persona retrieval depth + diversity. Parent rubric questions span
+# several notes (a mentors question needs the IFSP note; a schools question
+# needs MSD and Clerc), so the fast tier gets deep-tier context, and no single
+# source note may fill more than PARENT_MAX_PER_SOURCE of the kept slots (the
+# boosted 64KB MSD note would otherwise crowd out every other source).
+PARENT_TOP_K = 8
+# 3, not 2: single-canonical-note questions (national orgs, finding mentors)
+# need three chunks of that one note, and the r2 eval showed a cap of 2
+# displacing exactly those (national_orgs 100 -> 50). With TOP_K 8 a cap of 3
+# still forces at least three distinct source notes into context.
+PARENT_MAX_PER_SOURCE = 3
 
 # Query-time semantic rerank of BM25 candidates. After BM25 + section boost, the
 # top hit is often a dense secondary note that merely repeats query words while
@@ -139,6 +166,16 @@ HYBRID_ENABLED = os.environ.get("BRAIN_HYBRID", "1") not in ("0", "false", "Fals
 RRF_K = 60          # standard RRF damping constant; larger flattens rank weighting
 RRF_POOL = 60       # fuse this many top docs from each ranker
 DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
+
+# Self-updating knowledge base: after a web fetch is persisted into the vault
+# (_WebCache notes via web_cache.py), spawn update_index.py so the new pages
+# are folded into bm25.pkl within seconds, and hot-reload the index when its
+# mtime changes (see maybe_reload_index). The brain therefore LEARNS what it
+# looked up: the next question can be answered from the vault without touching
+# the web again. BRAIN_AUTOLEARN=0 disables the trigger (notes still
+# accumulate for the next manual build_index.py run).
+AUTOLEARN_ENABLED = os.environ.get("BRAIN_AUTOLEARN", "1") not in (
+    "0", "false", "False", "no")
 
 MAX_WEB_RESULTS = 5
 MAX_WEB_FETCH = 3
@@ -344,6 +381,32 @@ def load_index():
     return chunks, bm25, meta
 
 
+def index_mtime():
+    """mtime of bm25.pkl, or None when unreadable. One stat call, cheap
+    enough to run per question."""
+    try:
+        return os.path.getmtime(INDEX_PATH)
+    except Exception:
+        return None
+
+
+def maybe_reload_index(chunks, bm25, meta, loaded_mtime):
+    """Hot-reload the index when update_index.py (auto-learn) has replaced
+    the pickle since it was loaded. Returns (chunks, bm25, meta, mtime,
+    reloaded). Never raises and never kills the caller: any load failure
+    keeps the current in-memory index and records the new mtime so a broken
+    pickle is not retried on every question."""
+    current = index_mtime()
+    if current is None or (loaded_mtime is not None
+                           and current <= loaded_mtime):
+        return chunks, bm25, meta, loaded_mtime, False
+    try:
+        new_chunks, new_bm25, new_meta = load_index()
+    except (SystemExit, Exception):
+        return chunks, bm25, meta, current, False
+    return new_chunks, new_bm25, new_meta, current, True
+
+
 def _normalize_key(key):
     """Lowercase, strip, and collapse internal whitespace to single spaces."""
     try:
@@ -488,6 +551,29 @@ def _apply_parent_boost(scores, chunks):
                 boosted = list(scores)
             boosted[i] += PARENT_BOOST
     return boosted if boosted is not None else scores
+
+
+def _diversify_order(order, chunks, keep_k, max_per_source):
+    """Return up to keep_k chunk ids from `order`, keeping at most
+    max_per_source chunks from any one source note and backfilling from the
+    remaining ids in ranked order when the cap leaves slots open. Parent
+    persona only: its rubric questions need facts from several different
+    notes, and one long boosted note can otherwise fill every slot."""
+    picked, overflow, counts = [], [], {}
+    for i in order:
+        src = str((chunks[i] or {}).get("source") or "")
+        if counts.get(src, 0) < max_per_source:
+            counts[src] = counts.get(src, 0) + 1
+            picked.append(i)
+            if len(picked) >= keep_k:
+                return picked
+        else:
+            overflow.append(i)
+    for i in overflow:
+        picked.append(i)
+        if len(picked) >= keep_k:
+            break
+    return picked
 
 
 def _rerank_by_embedding(question, chunks, cand_ids):
@@ -779,6 +865,25 @@ def fetch_page(url):
         return ""
 
 
+def _spawn_index_update():
+    """Fire-and-forget update_index.py so pages fetched for THIS question
+    become retrievable on the next one (main/brain_web hot-reload on index
+    mtime). Detached and silent: the child owns no TTY, survives REPL exit,
+    and any spawn failure is swallowed (the notes still land in the next full
+    build_index.py run). Gated by BRAIN_AUTOLEARN."""
+    if not AUTOLEARN_ENABLED:
+        return
+    try:
+        import subprocess
+        subprocess.Popen(
+            [sys.executable or "python3",
+             os.path.join(BRAIN_ROOT, "update_index.py"), "--quiet"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+
+
 def gather_web_context(query):
     """Search, fetch the top few hrefs, and return a list of (url, excerpt)."""
     results = web_search(query)
@@ -805,6 +910,9 @@ def gather_web_context(query):
     if excerpts and persist_web_fetch is not None:
         try:
             persist_web_fetch(query, excerpts, WEB_CACHE_DIR, WEB_VAULT_DIR)
+            # Learn what we just looked up: fold the new notes into the index
+            # in the background so the next question retrieves them locally.
+            _spawn_index_update()
         except Exception:
             pass
     return excerpts
@@ -903,15 +1011,24 @@ PARENT_SYSTEM = (
     "specifics ONLY if they appear verbatim in the snippets.\n"
     "Speak to the parent directly and plainly. Explain any technical term the "
     "first time you use it. Never shame or blame a parent for past choices; "
-    "treat every question as a fresh start and say plainly when it is not too "
-    "late to act. Follow the Deaf-community-affirming framing in the "
-    "snippets: deafness is a difference with its own language and community, "
-    "not only a medical problem, and early access to sign language protects a "
-    "child's development without harming speech. When the snippets name "
-    "organizations, programs, schools, or next steps, close with the concrete "
-    "actions the parent can take, citing the source filenames. Aim for a "
-    "clear, warm answer of about 5 to 9 sentences. Use only the provided "
-    "context."
+    "treat every question as a fresh start, and when the snippets support it, "
+    "say plainly that past choices were made with good intentions, that it is "
+    "not the parent's fault, and that it is not too late to act. Follow the "
+    "Deaf-community-affirming framing in the snippets: deafness is a "
+    "difference with its own language and community, not only a medical "
+    "problem, and early access to sign language protects a child's "
+    "development without harming speech.\n"
+    "Be thorough: cover every point the snippets support that helps answer "
+    "the question, and name each organization, program, school, law, or "
+    "defined term the snippets provide (for example IDEA Part C, an IFSP, a "
+    "named school or mentor program) with a plain one-line explanation of "
+    "what it does for the family. Do not stop at the first good point; a "
+    "parent deciding what to do next needs the whole picture the snippets "
+    "give. When the snippets name organizations, programs, schools, or next "
+    "steps, close with the concrete actions the parent can take, citing the "
+    "source filenames. Aim for a clear, warm answer of about 7 to 12 "
+    "sentences, and use short paragraphs or a short list when that is easier "
+    "for a stressed parent to follow. Use only the provided context."
 )
 
 
@@ -1274,7 +1391,12 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     mode = "bm25"
     if len(scores):
         ranked = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)
-        keep_k = TOP_K_DEEP if model == DEEP_MODEL else TOP_K_FAST
+        if model == DEEP_MODEL:
+            keep_k = TOP_K_DEEP
+        elif persona == "parent":
+            keep_k = PARENT_TOP_K
+        else:
+            keep_k = TOP_K_FAST
         order = None
         # Hybrid path: fuse BM25 with GLOBAL dense retrieval via RRF. Only when a
         # dense block is present, hybrid is enabled, and the query embed succeeds;
@@ -1297,6 +1419,9 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
             # embedder was unreachable). Identical to the pre-hybrid behavior.
             cand_ids = [i for i in ranked if scores[i] > 0][:RERANK_CAND_N]
             order = _rerank_by_embedding(question, chunks, cand_ids)
+        if persona == "parent" and order:
+            order = _diversify_order(order, chunks, keep_k,
+                                     PARENT_MAX_PER_SOURCE)
         for i in order[:keep_k]:
             retrieved.append(chunks[i])
         if ranked:
@@ -1528,6 +1653,7 @@ def main():
     if ui is None or ui.plain:
         print("Loading the vault index...")
     chunks, bm25, meta = load_index()
+    index_mtime_loaded = index_mtime()
 
     if not model:
         model = choose_model()
@@ -1593,6 +1719,19 @@ def main():
         question = line.strip()
         if not question:
             continue
+
+        # Auto-learn hot-reload: when a background update_index.py has folded
+        # freshly fetched web pages into the pickle, swap the new index in
+        # before answering so the brain already knows what it just looked up.
+        chunks, bm25, meta, index_mtime_loaded, _reloaded = \
+            maybe_reload_index(chunks, bm25, meta, index_mtime_loaded)
+        if _reloaded:
+            note = ("[index reloaded: %d chunks, web knowledge folded in]"
+                    % len(chunks))
+            if ui is not None:
+                ui.note(note)
+            else:
+                print(note)
 
         # Per-question tier: default fast; "/deep <q>" escalates to the deep model.
         deep_once = False
