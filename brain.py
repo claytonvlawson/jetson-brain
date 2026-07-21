@@ -167,6 +167,49 @@ RRF_K = 60          # standard RRF damping constant; larger flattens rank weight
 RRF_POOL = 60       # fuse this many top docs from each ranker
 DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
 
+# ---- ANN (approximate nearest neighbor) dense search + non-indexed post-filter
+# The default dense search is an EXACT full mat@q cosine: precise and, at a few
+# thousand L2-normalized rows, already ~1 ms. ANN is an OPTIONAL SCALING path for
+# when the self-updating KB grows large (tens of thousands of chunks), where an
+# exhaustive scan per query stops being free. It builds an IVF (inverted-file)
+# coarse quantizer: a small pure-numpy cosine k-means clusters the doc vectors
+# into ~sqrt(n) cells, and each query only exact-scores the rows in its NPROBE
+# nearest cells. That trades a little recall for a sub-linear scan; at the current
+# corpus size ANN returns the same top docs as the exact scan, so it ships
+# DEFAULT OFF (BRAIN_ANN=1 to engage) and the proven exact path is byte-for-byte
+# unchanged. numpy-only: faiss/hnswlib are not installed and the Jetson's uplink
+# is unreliable, so no compiled ANN dependency is introduced.
+#
+# POST-FILTER (non-indexed): an include/exclude predicate on a chunk's `source`
+# path -- an attribute that is NOT part of the vector index. It is applied AFTER
+# the ANN candidate set is gathered (the search over-fetches BRAIN_ANN_OVERFETCH x
+# the fuse pool so filtering still leaves enough rows to rank), pruning candidates
+# with no index rebuild. The same predicate is honored on the exact path too, so a
+# filter behaves identically whichever dense search runs. Env-configured by
+# default; callers may also pass an explicit predicate to _dense_scores.
+ANN_ENABLED      = os.environ.get("BRAIN_ANN", "0") not in ("0", "false", "False", "no")
+# nprobe default 20: on the current ~1.3k-row / ~36-cell index that is measured
+# LOSSLESS for what reaches the LLM -- the dense top-8 (>= every persona's keep_k)
+# matches the exact scan on all eval questions, and top-60 RRF-pool recall is
+# ~0.998. Flipping BRAIN_ANN=1 on therefore cannot change answers at this scale.
+# As the self-updating KB grows (cells scale with sqrt(n)), lower nprobe to trade
+# a little recall for a smaller scanned fraction -- that speed/recall dial is the
+# whole point of ANN, and it only starts paying off well above the current size.
+ANN_NPROBE       = max(1, int(os.environ.get("BRAIN_ANN_NPROBE", "20") or 20))
+ANN_MIN_DOCS     = max(1, int(os.environ.get("BRAIN_ANN_MIN_DOCS", "256") or 256))
+ANN_OVERFETCH    = max(1, int(os.environ.get("BRAIN_ANN_OVERFETCH", "3") or 3))
+ANN_KMEANS_ITERS = max(1, int(os.environ.get("BRAIN_ANN_KMEANS_ITERS", "10") or 10))
+ANN_SEED         = int(os.environ.get("BRAIN_ANN_SEED", "0") or 0)
+
+
+def _prefix_tuple(env_val):
+    """Parse a comma-separated env value into a tuple of stripped prefixes."""
+    return tuple(p.strip() for p in (env_val or "").split(",") if p.strip())
+
+
+DENSE_INCLUDE = _prefix_tuple(os.environ.get("BRAIN_DENSE_INCLUDE"))
+DENSE_EXCLUDE = _prefix_tuple(os.environ.get("BRAIN_DENSE_EXCLUDE"))
+
 # Self-updating knowledge base: after a web fetch is persisted into the vault
 # (_WebCache notes via web_cache.py), spawn update_index.py so the new pages
 # are folded into bm25.pkl within seconds, and hot-reload the index when its
@@ -621,7 +664,113 @@ def _rerank_by_embedding(question, chunks, cand_ids):
         return cand_ids
 
 
-def _dense_scores(question, chunks, meta):
+def _default_dense_predicate():
+    """Build a per-chunk keep() predicate from BRAIN_DENSE_INCLUDE / _EXCLUDE, or
+    return None when neither is set (no filtering). keep(chunk) is True to keep the
+    chunk. NON-INDEXED: it reads chunk['source'] (a metadata attribute), never the
+    vector index, so include/exclude changes take effect with no rebuild."""
+    inc, exc = DENSE_INCLUDE, DENSE_EXCLUDE
+    if not inc and not exc:
+        return None
+
+    def keep(chunk):
+        src = str((chunk or {}).get("source") or "")
+        if inc and not src.startswith(inc):
+            return False
+        if exc and src.startswith(exc):
+            return False
+        return True
+
+    return keep
+
+
+def _build_ivf(mat, iters=ANN_KMEANS_ITERS, seed=ANN_SEED):
+    """Cluster the (n, dim) L2-normalized doc matrix into ~sqrt(n) cells with a
+    small cosine k-means (pure numpy). Returns {'centroids': (k, dim) float32
+    L2-normalized, 'cells': list of int32 row-index arrays} or None on any failure
+    (caller then falls back to the exact scan). Deterministic for a fixed seed so
+    eval A/Bs are reproducible. Since the doc rows are L2-normalized, cosine is a
+    dot product, so assignment is argmax of mat @ centroids.T."""
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    try:
+        n = int(mat.shape[0])
+        if n <= 0:
+            return None
+        k = min(max(1, int(round(n ** 0.5))), n)
+        rng = np.random.default_rng(seed)
+        cent = mat[rng.choice(n, size=k, replace=False)].astype(np.float32).copy()
+        for _ in range(iters):
+            labels = (mat @ cent.T).argmax(axis=1)
+            for j in range(k):
+                members = mat[labels == j]
+                if members.shape[0]:
+                    cent[j] = members.mean(axis=0)
+            norms = np.linalg.norm(cent, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            cent = (cent / norms).astype(np.float32)
+        labels = (mat @ cent.T).argmax(axis=1)
+        cells = [np.where(labels == j)[0].astype(np.int32) for j in range(k)]
+        return {"centroids": cent, "cells": cells}
+    except Exception:
+        return None
+
+
+def _get_ivf(dm, mat):
+    """Lazily build and cache the IVF on the dense-block dict. A hot index reload
+    hands _prep_dense a fresh dm with no cache, so the IVF rebuilds automatically
+    when the vectors change. Caches False on build failure to avoid retrying every
+    query; returns the IVF dict or None."""
+    ivf = dm.get("_ivf")
+    if ivf is None:
+        ivf = _build_ivf(mat)
+        dm["_ivf"] = ivf or False
+    return ivf or None
+
+
+def _ann_candidates(qa, ivf, nprobe, want):
+    """Return row indices from the query's nearest IVF cells: at least `nprobe`
+    cells, and keep probing (in centroid-similarity order) until at least `want`
+    rows are gathered or the cells are exhausted. The `want` over-fetch gives the
+    non-indexed post-filter headroom so it still leaves enough rows to fuse.
+    Returns a python list of row indices, or None if the IVF is unusable."""
+    try:
+        import numpy as np
+        order = np.argsort(-(ivf["centroids"] @ qa))
+        cells = ivf["cells"]
+        cand, probed = [], 0
+        for c in order:
+            if probed >= nprobe and len(cand) >= want:
+                break
+            cand.extend(int(r) for r in cells[int(c)])
+            probed += 1
+        return cand
+    except Exception:
+        return None
+
+
+def _post_filter_rows(cand_rows, rows_idx, chunks, predicate):
+    """Drop candidate dense-rows whose chunk fails the (non-indexed) predicate.
+    rows_idx maps a dense row to its chunk index; rows with no chunk (-1) are
+    dropped. Dedupes while preserving first-seen order. predicate=None keeps every
+    mapped row."""
+    out, seen = [], set()
+    for r in cand_rows:
+        if r in seen:
+            continue
+        seen.add(r)
+        ci = rows_idx[r] if 0 <= r < len(rows_idx) else -1
+        if ci < 0:
+            continue
+        if predicate is not None and not predicate(chunks[ci]):
+            continue
+        out.append(r)
+    return out
+
+
+def _dense_scores(question, chunks, meta, predicate=None):
     """Global embedding-cosine score per chunk INDEX for hybrid retrieval.
 
     Embeds the question once (same Ollama embed path as the router/rerank) with
@@ -649,21 +798,56 @@ def _dense_scores(question, chunks, meta):
         n = dm["n"]
         rows_idx = dm["rows_idx"]
         scores = [float("-inf")] * len(chunks)
+        pred = predicate if predicate is not None else _default_dense_predicate()
         mat = dm.get("matrix")
         if mat is not None:
             import numpy as np
-            sims = mat @ np.array(qv, dtype=np.float32)   # (n,) cosine per row
-            for r in range(n):
-                ci = rows_idx[r]
-                if ci >= 0:
+            qa = np.array(qv, dtype=np.float32)
+            rows = None
+            # ANN path: restrict scoring to the post-filtered candidates in the
+            # query's nearest IVF cells. Only above ANN_MIN_DOCS, where a coarse
+            # quantizer beats an exhaustive scan; below it the exact scan wins.
+            if ANN_ENABLED and n >= ANN_MIN_DOCS:
+                ivf = _get_ivf(dm, mat)
+                if ivf is not None:
+                    cand = _ann_candidates(qa, ivf, ANN_NPROBE,
+                                           RRF_POOL * ANN_OVERFETCH)
+                    if cand is not None:
+                        rows = _post_filter_rows(cand, rows_idx, chunks, pred)
+            if rows is not None:
+                # ANN + post-filter: exact-cosine ONLY the surviving candidate rows
+                # (ranking among them stays exact). Rows outside the candidate set
+                # keep -inf and sink out of the dense pool. An empty survivor set
+                # means dense contributes nothing this query and BM25 carries it.
+                if rows:
+                    cr = np.asarray(sorted(set(rows)), dtype=np.int64)
+                    sims = mat[cr] @ qa
+                    for j in range(cr.shape[0]):
+                        ci = rows_idx[int(cr[j])]
+                        if ci >= 0:
+                            scores[ci] = float(sims[j])
+            else:
+                # Exact full scan (default). Honor the non-indexed post-filter here
+                # too, so a filter behaves the same with ANN off as with it on.
+                sims = mat @ qa                           # (n,) cosine per row
+                for r in range(n):
+                    ci = rows_idx[r]
+                    if ci < 0:
+                        continue
+                    if pred is not None and not pred(chunks[ci]):
+                        continue
                     scores[ci] = float(sims[r])
         else:
+            # Pure-Python fallback (numpy unavailable): exact scan + post-filter.
+            # ANN needs numpy, so this path stays exhaustive.
             buf = dm.get("buf")
             if buf is None:
                 return None
             for r in range(n):
                 ci = rows_idx[r]
                 if ci < 0:
+                    continue
+                if pred is not None and not pred(chunks[ci]):
                     continue
                 base = r * dim
                 scores[ci] = _dot(qv, buf[base:base + dim])
