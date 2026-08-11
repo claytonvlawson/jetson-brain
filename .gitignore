@@ -26,3 +26,4 @@ answer_cache/
 .DS_Store
 
 advisor.env.local
+.venv-asl/
