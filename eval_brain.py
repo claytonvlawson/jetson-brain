@@ -66,7 +66,16 @@ except Exception:
 # -- config, mirrored from brain.py so the eval matches the deployed system ---
 OLLAMA_HOST = getattr(brain, "OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_MODEL = getattr(brain, "DEFAULT_MODEL", "llama3.2:3b")
-DEFAULT_JUDGE = getattr(brain, "DEEP_MODEL", "qwen2.5:7b")
+# Judge on the SAME 3B model as the answerer. On the 8GB Orin Nano the 3B
+# answerer and a 7B judge cannot co-reside, so a separate 7B judge forced a
+# model swap on every --no-cache question: the dominant cost of a battery and
+# the recurring OOM that killed Ollama mid-run. Judging on 3B keeps one model
+# resident -- far faster, no swap, no OOM. The judge already grades one fact at
+# a time via isolated yes/no calls (judge_isolated), the design that lets a
+# small model grade reliably. Trade-off: answerer and judge are now the same
+# model (self-grading), tolerable because grading is per-fact factual presence,
+# not holistic quality. Pass --judge-model qwen2.5:7b to restore the 7B judge.
+DEFAULT_JUDGE = DEFAULT_MODEL
 CACHE_DIR = getattr(brain, "CACHE_DIR", "/mnt/nvme/brain/cache")
 DEFAULT_GOLD = os.path.join(SCRIPT_DIR, "gold_questions.jsonl")
 PASS_THRESHOLD = 90
@@ -492,9 +501,19 @@ def build_parser():
     p.add_argument("--only", action="append", default=None, metavar="ID",
                    help="grade only this question id (repeatable)")
     p.add_argument("--retries", type=int, default=2, help="judge retries on a malformed reply")
-    p.add_argument("--judge-votes", type=int, default=3, help="judge samples per question, majority-voted")
-    p.add_argument("--isolate", action="store_true",
-                   help="grade each fact in its own focused call (most reliable for a small judge)")
+    p.add_argument("--judge-votes", type=int, default=3,
+                   help="judge samples per question, majority-voted (only used with --batch)")
+    # Per-fact isolated grading is the DEFAULT: on the 8GB board's 3B self-judge the
+    # batched checklist judge() goes negation-blind (false-positive violations) and
+    # drops verbatim-present facts (false-negative coverage), so identical answers
+    # score differently. Isolating one fact per call fixed a whole gold set from
+    # 17/28 to 28/28 (mean 100) AND ran faster (no vote-ensembling). Use --batch to
+    # restore the old majority-vote judge (only sensible with a stronger --judge-model).
+    p.add_argument("--isolate", dest="isolate", action="store_true",
+                   help="grade each fact in its own focused call (DEFAULT; most reliable for a small judge)")
+    p.add_argument("--batch", dest="isolate", action="store_false",
+                   help="use the batched majority-vote judge (--judge-votes) instead of per-fact isolation")
+    p.set_defaults(isolate=True)
     p.add_argument("--timeout", type=int, default=180, help="per-call timeout seconds")
     p.add_argument("--dry-run", action="store_true", help="list the plan, grade nothing")
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON report")
@@ -580,16 +599,26 @@ def main():
             print("Two-phase: answering all, then judging all (avoids model swapping).")
         answered = []
         for i, g in enumerate(gold, 1):
+            t0 = time.time()
             answer, sources, served_by = the_brain.ask(g["question"])
-            answered.append((g, answer, sources, served_by))
+            ask_s = time.time() - t0
+            timing = dict(getattr(brain, "LAST_TIMING", None) or {}) \
+                if served_by == "rag" else {}
+            answered.append((g, answer, sources, served_by, ask_s, timing))
             if not args.as_json:
                 print("  answered [%2d/%2d] %-8s %s" % (i, len(gold), served_by, g["id"]))
-        for i, (g, answer, sources, served_by) in enumerate(answered, 1):
+        for i, (g, answer, sources, served_by, ask_s, timing) in enumerate(answered, 1):
             score, missing, errors, _raw = run_judge(g, answer)
             results.append({
                 "id": g["id"], "question": g["question"], "score": score,
                 "served_by": served_by, "missing": missing, "errors": errors,
                 "answer_preview": (answer or "")[:200], "n_sources": len(sources or []),
+                # Deterministic regression signals: WHICH sources were retrieved
+                # (diffable across configs, unlike judge scores) and how long the
+                # answer took, with brain.py's per-stage breakdown when RAG ran.
+                "sources": list(sources or []),
+                "answer_seconds": round(ask_s, 3),
+                "timing": timing,
             })
             if not args.as_json:
                 tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
@@ -597,12 +626,19 @@ def main():
                     i, len(gold), tag, ("n/a" if score < 0 else str(score)), g["id"]))
     else:
         for i, g in enumerate(gold, 1):
+            t0 = time.time()
             answer, sources, served_by = the_brain.ask(g["question"])
+            ask_s = time.time() - t0
+            timing = dict(getattr(brain, "LAST_TIMING", None) or {}) \
+                if served_by == "rag" else {}
             score, missing, errors, _raw = run_judge(g, answer)
             results.append({
                 "id": g["id"], "question": g["question"], "score": score,
                 "served_by": served_by, "missing": missing, "errors": errors,
                 "answer_preview": (answer or "")[:200], "n_sources": len(sources or []),
+                "sources": list(sources or []),
+                "answer_seconds": round(ask_s, 3),
+                "timing": timing,
             })
             if not args.as_json:
                 tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
