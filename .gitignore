@@ -16,6 +16,7 @@ vault/
 *.pkl
 answer_cache/
 *.log
+obsidian_vectors.json
 
 # Secrets / env
 .env

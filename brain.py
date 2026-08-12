@@ -214,6 +214,26 @@ def _prefix_tuple(env_val):
 DENSE_INCLUDE = _prefix_tuple(os.environ.get("BRAIN_DENSE_INCLUDE"))
 DENSE_EXCLUDE = _prefix_tuple(os.environ.get("BRAIN_DENSE_EXCLUDE"))
 
+# ---- Obsidian Smart Connections Pro expansion -------------------------------
+# A SEPARATE relationship signal from expand_with_links' explicit [[wikilinks]]:
+# Obsidian's Smart Connections Pro plugin computes its own semantic similarity
+# between notes (384-dim TaylorAI/bge-micro-v2 embeddings -- a different model
+# and vector space than this codebase's own nomic-embed-text dense index, so
+# NOT comparable by raw score, only usable as its own ranking -- see
+# obsidian_rank.py's module docstring). When enabled, the retrieved notes seed a
+# nearest-neighbor lookup (obsidian_rank.expand_from_seeds) against a
+# precomputed vector export (export_obsidian_vectors.py), pulling in chunks
+# from related-but-not-retrieved notes the SAME way expand_with_links does for
+# wikilinks. No live query embedding is performed, so this adds no
+# torch/transformers dependency on the Jetson (bge-micro-v2 inference there was
+# checked and ruled out as impractical -- see
+# [[project-jetson-brain-obsidian-signal]]). Default OFF pending an A/B pass
+# against gold/heldout/parent evals, same discipline as WEB_SEMANTIC_ENABLED.
+OBSIDIAN_RANK_ENABLED = os.environ.get("BRAIN_OBSIDIAN_RANK", "0") not in (
+    "0", "false", "False", "no")
+OBSIDIAN_TOP_K_PER_SEED = max(1, int(os.environ.get("BRAIN_OBSIDIAN_TOP_K", "5") or 5))
+OBSIDIAN_MAX_EXPAND = max(1, int(os.environ.get("BRAIN_OBSIDIAN_MAX_EXPAND", "3") or 3))
+
 # Self-updating knowledge base: after a web fetch is persisted into the vault
 # (_WebCache notes via web_cache.py), spawn update_index.py so the new pages
 # are folded into bm25.pkl within seconds, and hot-reload the index when its
@@ -267,6 +287,22 @@ MAX_WEB_RESULTS = 5
 MAX_WEB_FETCH = 3
 WEB_FETCH_TIMEOUT = 8
 PAGE_CHAR_CAP = 2000
+
+# ---- Semantic web-fallback selection ---------------------------------------
+# gather_web_context's DEFAULT behavior just takes DuckDuckGo's first
+# MAX_WEB_FETCH results in search-engine order -- no relevance scoring at all.
+# When enabled, this fetches all MAX_WEB_RESULTS candidates instead of stopping
+# early, embeds the query once and each excerpt via the SAME nomic-embed-text
+# pipeline already used for vault rerank (semantic_cache._embed/_normalize/_dot,
+# see _rerank_by_embedding above), and keeps the MAX_WEB_FETCH excerpts closest
+# to the query by cosine similarity instead of DDG's return order. Self-
+# degrading: any embed failure (Ollama unreachable, timeout) falls back to the
+# original first-N-in-order behavior rather than blocking or dropping results.
+# Default OFF pending an A/B pass against heldout_gold.jsonl questions that hit
+# the web fallback, matching this project's existing opt-in-until-measured
+# discipline for retrieval changes (see BRAIN_ANN, cross-encoder rerank notes).
+WEB_SEMANTIC_ENABLED = os.environ.get("BRAIN_WEB_SEMANTIC", "0") not in (
+    "0", "false", "False", "no")
 HISTORY_TURNS = 6  # keep the last N user+assistant exchanges
 
 # Phase-1 grounding calls carry only the last 2 exchanges (4 messages). The
@@ -1540,12 +1576,51 @@ def _spawn_index_update():
         pass
 
 
+def _rank_excerpts_by_relevance(query, candidates):
+    """Reorder (url, text) candidates by query<->excerpt cosine using the same
+    nomic-embed-text pipeline as _rerank_by_embedding. Returns candidates
+    unchanged (DDG order) on any embed failure -- never raises, never blocks.
+    Caller is responsible for slicing to MAX_WEB_FETCH afterward."""
+    if len(candidates) < 2:
+        return candidates
+    try:
+        from semantic_cache import _embed, _normalize, _dot
+    except Exception:
+        return candidates
+    qraw = _embed(query, OLLAMA_HOST, RERANK_EMBED_MODEL, RERANK_TIMEOUT)
+    if not qraw:
+        return candidates
+    qv = _normalize(qraw)
+    scored = []
+    any_vec = False
+    for href, text in candidates:
+        vraw = _embed(text[:RERANK_CHUNK_CHARS], OLLAMA_HOST, RERANK_EMBED_MODEL,
+                       RERANK_TIMEOUT)
+        if vraw:
+            any_vec = True
+            scored.append((_dot(qv, _normalize(vraw)), (href, text)))
+        else:
+            scored.append((float("-inf"), (href, text)))  # sinks below embedded ones
+    if not any_vec:
+        return candidates
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [pair for _, pair in scored]
+
+
 def gather_web_context(query):
-    """Search, fetch the top few hrefs, and return a list of (url, excerpt)."""
+    """Search, fetch hrefs, and return a list of (url, excerpt) capped at
+    MAX_WEB_FETCH.
+
+    Default: takes DuckDuckGo's first MAX_WEB_FETCH results in search-engine
+    order (original behavior, unchanged fetch cost). With BRAIN_WEB_SEMANTIC=1,
+    fetches all MAX_WEB_RESULTS candidates and keeps the MAX_WEB_FETCH closest
+    to the query by embedding cosine instead -- see WEB_SEMANTIC_ENABLED above.
+    """
     results = web_search(query)
-    excerpts = []
+    fetch_cap = MAX_WEB_RESULTS if WEB_SEMANTIC_ENABLED else MAX_WEB_FETCH
+    candidates = []
     for r in results:
-        if len(excerpts) >= MAX_WEB_FETCH:
+        if len(candidates) >= fetch_cap:
             break
         href = r.get("href") or r.get("url") or r.get("link")
         if not href:
@@ -1555,7 +1630,10 @@ def gather_web_context(query):
             # Fall back to the search snippet so the model still has something.
             text = (r.get("body") or "").strip()
         if text:
-            excerpts.append((href, text))
+            candidates.append((href, text))
+    if WEB_SEMANTIC_ENABLED:
+        candidates = _rank_excerpts_by_relevance(query, candidates)
+    excerpts = candidates[:MAX_WEB_FETCH]
     # Persist every DuckDuckGo fetch into the brain: a raw JSON record for
     # dedup/reuse plus an indexable vault note for the next build_index.py run.
     # Best-effort and strictly additive: a no-op when nothing was fetched or the
@@ -1953,6 +2031,69 @@ def expand_with_links(retrieved, scores, meta):
     return added, linked_ids
 
 
+def expand_with_obsidian_signal(retrieved, context_chunks, meta):
+    """Pull in a representative chunk for each note the Obsidian Smart
+    Connections Pro plugin has scored as related to the retrieved notes.
+
+    Mirrors expand_with_links' shape and dedup rules, but the relationship
+    source is different: AI-computed embedding similarity the plugin already
+    persisted to disk (obsidian_rank.py), not an explicit [[wikilink]] a human
+    wrote. `retrieved` (the top BM25/dense hits) supplies the seed note paths;
+    `context_chunks` (retrieved + any wikilink expansion already applied) is
+    used only for dedup, so this never re-adds a chunk already present. Capped
+    at OBSIDIAN_MAX_EXPAND. Never raises: any failure (missing module, empty
+    vector export, bad seed) degrades to returning whatever succeeded so far,
+    or an empty list."""
+    added = []
+    if not OBSIDIAN_RANK_ENABLED:
+        return added
+    try:
+        import obsidian_rank
+        vectors = obsidian_rank.load_note_vectors_from_export()
+        if not vectors:
+            return added
+        by_source = meta.get("by_source") or {}
+        by_id = meta.get("by_id") or {}
+
+        seed_paths = []
+        seen_seed = set()
+        for c in retrieved:
+            src = c.get("source")
+            if src and src not in seen_seed:
+                seen_seed.add(src)
+                seed_paths.append(src)
+        if not seed_paths:
+            return added
+
+        already_present = {c.get("id") for c in context_chunks
+                           if c.get("id") is not None}
+        already_sources = {c.get("source") for c in context_chunks
+                           if c.get("source")}
+
+        expanded = obsidian_rank.expand_from_seeds(
+            vectors, seed_paths, top_k_per_seed=OBSIDIAN_TOP_K_PER_SEED,
+            max_results=OBSIDIAN_MAX_EXPAND)
+        for path, _score in expanded:
+            if path in already_sources:
+                continue
+            ids = by_source.get(path) or []
+            if not ids:
+                continue
+            cid = ids[0]  # note's first/primary chunk -- no BM25 score here to
+                          # pick a better one by, unlike expand_with_links.
+            if cid in already_present:
+                continue
+            chunk = by_id.get(cid)
+            if chunk is None:
+                continue
+            added.append(chunk)
+            already_present.add(cid)
+            already_sources.add(path)
+    except Exception:
+        return added
+    return added
+
+
 def collect_reference_urls(chunks, meta):
     """De-duplicated list of external URLs found in the given notes, capped."""
     urls = []
@@ -2028,8 +2169,8 @@ def _format_timing(tm):
     for key in ("mode", "persona"):
         if tm.get(key):
             parts.append("%s=%s" % (key, tm[key]))
-    for key in ("bm25", "dense", "rerank", "expand", "ttft", "phase1", "route", "web",
-                "total"):
+    for key in ("bm25", "dense", "rerank", "expand", "obsidian", "ttft", "phase1",
+                "route", "web", "total"):
         if key in tm:
             parts.append("%s=%.3f" % (key, tm[key]))
     for key in ("prompt_eval_count", "eval_count"):
@@ -2236,6 +2377,26 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
             len(added), len(context_chunks)))
     else:
         run.skip("expand", "no wikilinks to follow")
+
+    # --- Retrieval: Obsidian Smart Connections expansion ------------------
+    # A second, independent expansion signal alongside wikilinks -- see
+    # OBSIDIAN_RANK_ENABLED / expand_with_obsidian_signal above. Reuses
+    # linked_ids' existing "(linked)" context label rather than adding a
+    # separate label, since both mean the same thing to the model: this chunk
+    # was pulled in via a relationship signal, not direct BM25/dense retrieval.
+    if OBSIDIAN_RANK_ENABLED:
+        run.running("obsidian")
+        _t = time.perf_counter()
+        obsidian_added = expand_with_obsidian_signal(retrieved, context_chunks, meta)
+        tm["obsidian"] = time.perf_counter() - _t
+        if obsidian_added:
+            linked_ids |= {c.get("id") for c in obsidian_added
+                          if c.get("id") is not None}
+            context_chunks = context_chunks + obsidian_added
+            run.done("obsidian", "+%d related chunks (%d total)" % (
+                len(obsidian_added), len(context_chunks)))
+        else:
+            run.skip("obsidian", "no related notes found")
 
     # Reference URLs offered to the model for optional FETCH.
     ref_urls = collect_reference_urls(context_chunks, meta)

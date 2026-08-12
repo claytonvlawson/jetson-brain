@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -76,6 +76,17 @@ if [[ "${MD_COUNT}" -eq 0 ]]; then
   exit 1
 fi
 
+# ---- Generate the Obsidian Smart Connections vector export ---------------
+# Optional signal for BRAIN_OBSIDIAN_RANK (default off -- see brain.py and
+# obsidian_rank.py). Non-fatal: a vault with no .smart-env/ (plugin not
+# installed, or a different vault) just means this feature has nothing to
+# draw on; brain.py already degrades gracefully when the export is missing
+# (obsidian_rank.load_note_vectors_from_export returns {}).
+echo "==> Generating Obsidian Smart Connections vector export ..."
+BRAIN_OBSIDIAN_SMART_ENV_DIR="${VAULT_SRC}/.smart-env/multi" \
+  python3 "${HERE}/export_obsidian_vectors.py" "${HERE}/obsidian_vectors.json" \
+  || echo "    (skipped: no Obsidian vector data found at ${VAULT_SRC}/.smart-env/multi)"
+
 # ---- Ship the code ------------------------------------------------------
 echo "==> Copying scripts to ${REMOTE}/ ..."
 scp -q \
@@ -121,7 +132,17 @@ scp -q \
   "${HERE}/research_review.py" \
   "${HERE}/research-agent.service" \
   "${HERE}/research-agent.timer" \
+  "${HERE}/obsidian_rank.py" \
+  "${HERE}/export_obsidian_vectors.py" \
   "${JETSON}:${REMOTE}/"
+
+# obsidian_vectors.json is a generated artifact (see the step above), not
+# source code -- shipped separately so a vault with no Smart Connections data
+# (missing/empty file, handled non-fatally above) doesn't fail the main copy.
+if [[ -f "${HERE}/obsidian_vectors.json" ]]; then
+  scp -q "${HERE}/obsidian_vectors.json" "${JETSON}:${REMOTE}/"
+  echo "    Shipped obsidian_vectors.json ($(du -h "${HERE}/obsidian_vectors.json" | cut -f1 | tr -d '[:space:]'))."
+fi
 
 # ---- Make scripts executable and install --------------------------------
 echo "==> Marking scripts executable and running install.sh on the Jetson ..."
