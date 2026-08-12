@@ -19,6 +19,7 @@ history, defensive REST fallbacks, existing commands) is removed.
 import os
 import re
 import sys
+import time
 import atexit
 import pickle
 import unicodedata
@@ -38,9 +39,12 @@ try:
 except Exception:
     UI = None
 
-# Paths (fixed install layout on the Jetson).
+# Paths (fixed install layout on the Jetson). BRAIN_INDEX overrides the pickle
+# path so two index variants can be A/B'd side by side without touching the
+# live index (eval runs point BRAIN_INDEX at a candidate build).
 BRAIN_ROOT = "/mnt/nvme/brain"
-INDEX_PATH = os.path.join(BRAIN_ROOT, "index", "bm25.pkl")
+INDEX_PATH = os.environ.get("BRAIN_INDEX") or os.path.join(
+    BRAIN_ROOT, "index", "bm25.pkl")
 CACHE_DIR = "/mnt/nvme/brain/cache"
 VAULT_NAME = "ThesisVault"   # Obsidian vault name for clickable source links
 
@@ -220,11 +224,66 @@ DENSE_EXCLUDE = _prefix_tuple(os.environ.get("BRAIN_DENSE_EXCLUDE"))
 AUTOLEARN_ENABLED = os.environ.get("BRAIN_AUTOLEARN", "1") not in (
     "0", "false", "False", "no")
 
+# Per-turn stage timing. BRAIN_TIMING=1 emits one machine-parseable line per
+# question to stderr (stage seconds + Ollama token counters) so latency work is
+# measured, not guessed. LAST_TIMING always holds the latest turn's numbers so
+# eval_brain.py can record them per question without parsing stderr.
+TIMING_ENABLED = os.environ.get("BRAIN_TIMING", "0") not in (
+    "0", "false", "False", "no")
+LAST_TIMING = {}
+
+# Ollama call counters from the most recent chat_once/chat_stream response
+# (prompt_eval_count = prefill tokens, eval_count = generated tokens,
+# total_duration = ns inside Ollama). Best effort: empty when the client or
+# response shape does not expose them.
+LAST_CHAT_STATS = {}
+
+
+def _capture_chat_stats(resp):
+    """Record prefill/generation counters from an Ollama response object or
+    final stream part into LAST_CHAT_STATS. Never raises."""
+    global LAST_CHAT_STATS
+    stats = {}
+    try:
+        for key in ("prompt_eval_count", "eval_count", "total_duration"):
+            val = resp.get(key) if isinstance(resp, dict) else getattr(resp, key, None)
+            if val is not None:
+                stats[key] = int(val)
+    except Exception:
+        stats = {}
+    if stats:
+        LAST_CHAT_STATS = stats
+
+
+def _reset_chat_stats():
+    """Clear the per-call counters. Called before the phase-1 generation so an
+    aborted or failed call records NO counters instead of silently reporting
+    the previous call's (a refusal-aborted holdback stream never consumes the
+    final Ollama part that carries them)."""
+    global LAST_CHAT_STATS
+    LAST_CHAT_STATS = {}
+
 MAX_WEB_RESULTS = 5
 MAX_WEB_FETCH = 3
 WEB_FETCH_TIMEOUT = 8
 PAGE_CHAR_CAP = 2000
 HISTORY_TURNS = 6  # keep the last N user+assistant exchanges
+
+# Phase-1 grounding calls carry only the last 2 exchanges (4 messages). The
+# full HISTORY_TURNS history in a 6-answer session can approach num_ctx=6144
+# in the prefill, where Ollama silently truncates from the TOP -- dropping the
+# system prompt and vault snippets, the exact content the grounding contract
+# depends on. Follow-up resolution ("what about her other paper?") only needs
+# the immediately preceding exchanges; the REPL history and phase-2 routing
+# keep the full window.
+PHASE1_HISTORY_MSGS = 4
+
+# Stream the phase-1 vault answer with sentinel holdback (chat_stream_holdback)
+# instead of blocking on the full generation. Output is byte-identical to the
+# blocking path; only time-to-first-token changes. BRAIN_STREAM_PHASE1=0
+# restores the blocking behavior.
+STREAM_PHASE1 = os.environ.get("BRAIN_STREAM_PHASE1", "1") not in (
+    "0", "false", "False", "no")
 
 MAX_LINK_EXPAND = 3  # was 2 — one extra linked note now that context is 4096
 MAX_DOC_URLS = 6     # cap on reference URLs offered to the model
@@ -619,10 +678,14 @@ def _diversify_order(order, chunks, keep_k, max_per_source):
     return picked
 
 
-def _rerank_by_embedding(question, chunks, cand_ids):
+def _rerank_by_embedding(question, chunks, cand_ids, qvec=None, qvec_model=None):
     """Reorder BM25 candidate chunk-indices by query<->chunk cosine using
     nomic-embed-text. Returns a reordered list of the same ids; on any failure
-    returns cand_ids unchanged (BM25 order). Never raises, never blocks."""
+    returns cand_ids unchanged (BM25 order). Never raises, never blocks.
+
+    qvec: an already-normalized question embedding (from the semantic router's
+    miss) reused when qvec_model matches RERANK_EMBED_MODEL, saving the second
+    embed of the same string; otherwise the question is embedded here."""
     global _RERANK_ENABLED
     if not _RERANK_ENABLED or len(cand_ids) < 2:
         return cand_ids
@@ -632,13 +695,16 @@ def _rerank_by_embedding(question, chunks, cand_ids):
         _RERANK_ENABLED = False
         return cand_ids
     try:
-        qvec = _embed(question, OLLAMA_HOST, RERANK_EMBED_MODEL, RERANK_TIMEOUT)
-        if not qvec:
-            # embedder unreachable: disable for the rest of the run so we do not
-            # pay a timeout per question, and keep BM25 order.
-            _RERANK_ENABLED = False
-            return cand_ids
-        qv = _normalize(qvec)
+        if qvec and qvec_model == RERANK_EMBED_MODEL:
+            qv = qvec
+        else:
+            raw = _embed(question, OLLAMA_HOST, RERANK_EMBED_MODEL, RERANK_TIMEOUT)
+            if not raw:
+                # embedder unreachable: disable for the rest of the run so we do
+                # not pay a timeout per question, and keep BM25 order.
+                _RERANK_ENABLED = False
+                return cand_ids
+            qv = _normalize(raw)
         scored = []
         any_vec = False
         for i in cand_ids:
@@ -770,10 +836,14 @@ def _post_filter_rows(cand_rows, rows_idx, chunks, predicate):
     return out
 
 
-def _dense_scores(question, chunks, meta, predicate=None):
+def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
+                  qvec_model=None):
     """Global embedding-cosine score per chunk INDEX for hybrid retrieval.
 
-    Embeds the question once (same Ollama embed path as the router/rerank) with
+    Reuses `qvec` (an already-normalized question embedding, e.g. from the
+    semantic router's miss) when qvec_model matches the index's dense model,
+    saving one Ollama embeddings round-trip per fresh turn; otherwise embeds
+    the question here (same Ollama embed path as the router/rerank) with
     the index's own dense model, then scores every chunk that has a dense vector
     by cosine (a dot product, since both sides are L2-normalized). Returns a list
     aligned to `chunks`: the cosine for chunks with a dense vector, -inf for
@@ -788,10 +858,13 @@ def _dense_scores(question, chunks, meta, predicate=None):
     except Exception:
         return None
     try:
-        qvec = _embed(question, OLLAMA_HOST, dm["model"], DENSE_TIMEOUT)
-        if not qvec:
-            return None
-        qv = _normalize(qvec)
+        if qvec and qvec_model == dm["model"]:
+            qv = qvec
+        else:
+            raw = _embed(question, OLLAMA_HOST, dm["model"], DENSE_TIMEOUT)
+            if not raw:
+                return None
+            qv = _normalize(raw)
         dim = dm["dim"]
         if len(qv) != dim:
             return None
@@ -916,6 +989,7 @@ def chat_once(model, messages):
         import ollama
         _ka = _keep_alive(model)
         resp = ollama.chat(model=model, messages=messages, stream=False, options=GEN_OPTIONS, keep_alive=_ka)
+        _capture_chat_stats(resp)
         msg = resp.get("message") if isinstance(resp, dict) else getattr(resp, "message", None)
         if isinstance(msg, dict):
             return msg.get("content", "") or ""
@@ -935,6 +1009,7 @@ def chat_once(model, messages):
         )
         resp.raise_for_status()
         data = resp.json()
+        _capture_chat_stats(data)
         return (data.get("message") or {}).get("content", "") or ""
     except Exception as exc:
         return "[error] could not reach the model: " + str(exc)
@@ -961,6 +1036,7 @@ def chat_stream(model, messages, sink=None):
         _ka = _keep_alive(model)
         for part in ollama.chat(model=model, messages=messages, stream=True, options=GEN_OPTIONS, keep_alive=_ka):
             piece = ""
+            _capture_chat_stats(part)   # the final part carries the counters
             msg = part.get("message") if isinstance(part, dict) else getattr(part, "message", None)
             if isinstance(msg, dict):
                 piece = msg.get("content", "") or ""
@@ -1012,6 +1088,102 @@ def chat_stream(model, messages, sink=None):
         else:
             print(msg)
         return "".join(collected)
+
+
+# NORMALIZED characters buffered before the phase-1 INSUFFICIENT decision is
+# made on a streaming reply. _is_insufficient collapses runs of whitespace and
+# then inspects only the opening ~200 chars of that normalized text, so the
+# buffer is measured the same way: once 210 normalized chars exist, the head
+# verdict provably equals the full-text verdict (raw-char counting undercounts
+# whitespace-heavy heads and could let a late-completing refusal stream).
+STREAM_HOLDBACK_CHARS = 210
+
+
+def _normalized_len(text):
+    # Length of text as _is_insufficient sees it (whitespace runs collapsed).
+    return len(re.sub(r"\s+", " ", text.strip()))
+
+
+def chat_stream_holdback(model, messages, decide, begin_stream,
+                         holdback_chars=STREAM_HOLDBACK_CHARS):
+    """Stream a chat reply, holding back the head until `holdback_chars`
+    NORMALIZED characters exist (see _normalized_len).
+
+    The head of the generation is buffered, then decide(head_text) picks the
+    branch:
+      - decide truthy (a refusal): generation is stopped immediately and
+        (partial_text, False) returned with NOTHING emitted, so the caller
+        runs its non-streamed branch exactly as if chat_once had returned the
+        sentinel (and the refusal's remaining tokens are never generated).
+      - decide falsy: begin_stream() is called ONCE for the sink, the buffer
+        is flushed to it, and the rest streams live. Returns (full_text, True).
+
+    A reply that ends before the threshold is decided on its complete text.
+    A transport error before anything was emitted returns (None, False) so the
+    caller can fall back to blocking chat_once; after emission has started, a
+    short interruption note is emitted and the partial text returned (same
+    policy as chat_stream: never regenerate into a sink that already has
+    text)."""
+    collected = []
+    sink = None
+    decided = False
+
+    def _decide_and_flush():
+        # True = refusal (stop generating). Otherwise open the sink and flush.
+        nonlocal sink, decided
+        decided = True
+        if decide("".join(collected)):
+            return True
+        sink = begin_stream()
+        sink("".join(collected))
+        return False
+
+    try:
+        import ollama
+        _ka = _keep_alive(model)
+        stream = ollama.chat(model=model, messages=messages, stream=True,
+                             options=GEN_OPTIONS, keep_alive=_ka)
+        try:
+            for part in stream:
+                _capture_chat_stats(part)   # the final part carries the counters
+                msg = part.get("message") if isinstance(part, dict) \
+                    else getattr(part, "message", None)
+                if isinstance(msg, dict):
+                    piece = msg.get("content", "") or ""
+                elif msg is not None:
+                    piece = getattr(msg, "content", "") or ""
+                else:
+                    piece = ""
+                if not piece:
+                    continue
+                collected.append(piece)
+                if decided:
+                    sink(piece)
+                elif _normalized_len("".join(collected)) >= holdback_chars:
+                    if _decide_and_flush():
+                        return "".join(collected), False
+        finally:
+            # Break/return closes the generator here so Ollama sees the
+            # disconnect and stops generating the refusal's tail.
+            close = getattr(stream, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+        if not decided:
+            # Whole reply shorter than the holdback: decide on the full text.
+            if _decide_and_flush():
+                return "".join(collected), False
+        return "".join(collected), True
+    except Exception:
+        if sink is not None and collected:
+            try:
+                sink("\n[stream interrupted; the answer may be incomplete]")
+            except Exception:
+                pass
+            return "".join(collected), True
+        return None, False
 
 
 # ---------------------------------------------------------------------------
@@ -1550,17 +1722,64 @@ def _answer_from_excerpts(model, question, excerpts, history, run):
     return _finish(run, history, question, answer, [u for u, _ in excerpts])
 
 
+def _format_timing(tm):
+    """One machine-parseable stderr line from a turn's timing dict."""
+    parts = ["[timing]"]
+    for key in ("mode", "persona"):
+        if tm.get(key):
+            parts.append("%s=%s" % (key, tm[key]))
+    for key in ("bm25", "dense", "rerank", "expand", "ttft", "phase1", "route", "web",
+                "total"):
+        if key in tm:
+            parts.append("%s=%.3f" % (key, tm[key]))
+    for key in ("prompt_eval_count", "eval_count"):
+        if key in tm:
+            parts.append("%s=%d" % (key, tm[key]))
+    return " ".join(parts)
+
+
 def handle_question(model, question, history, bm25, chunks, meta, web_enabled, run,
-                    persona="default"):
+                    persona="default", qvec=None, qvec_model=None):
     """Route a single question and stream the final answer through the run's UI.
     Updates history and returns (answer_text, sources_list). On error paths
     returns ("", []). `run` drives the ultracode-style progress tree; it always
     exists (it degrades to plain output when stdout is not a TTY).
     persona="parent" answers in the warm parent-guidance register (PARENT_SYSTEM)
     and boosts the curated parent-guidance notes in retrieval; grounding rules
-    are identical to the default persona."""
+    are identical to the default persona.
+
+    qvec/qvec_model: an already-normalized question embedding from the semantic
+    router's miss (SemanticCache.match_with_vec), reused by dense scoring and
+    the rerank fallback when the model names match, so one fresh turn embeds
+    the question once instead of twice.
+
+    Thin timing shell around _handle_question_impl: stage seconds land in
+    LAST_TIMING on every return path (BRAIN_TIMING=1 also prints them), so
+    latency work is measured on the real pipeline, not a mock."""
+    global LAST_TIMING
+    tm = {"persona": persona}
+    t0 = time.perf_counter()
+    try:
+        return _handle_question_impl(model, question, history, bm25, chunks,
+                                     meta, web_enabled, run, persona, tm,
+                                     qvec, qvec_model)
+    finally:
+        tm["total"] = time.perf_counter() - t0
+        LAST_TIMING = tm
+        if TIMING_ENABLED:
+            try:
+                sys.stderr.write(_format_timing(tm) + "\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
+
+
+def _handle_question_impl(model, question, history, bm25, chunks, meta,
+                          web_enabled, run, persona, tm, qvec=None,
+                          qvec_model=None):
     # --- Retrieval: BM25 scoring -----------------------------------------
     run.running("bm25")
+    _t = time.perf_counter()
     qtok = query_tokens(question)
     try:
         scores = bm25.get_scores(qtok)
@@ -1569,6 +1788,7 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     scores = _apply_section_boost(scores, chunks, qtok)
     if persona == "parent":
         scores = _apply_parent_boost(scores, chunks)
+    tm["bm25"] = time.perf_counter() - _t
 
     retrieved = []
     top_score = 0.0
@@ -1586,7 +1806,10 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
         # dense block is present, hybrid is enabled, and the query embed succeeds;
         # otherwise order stays None and we take the BM25 + rerank path below.
         if HYBRID_ENABLED and meta.get("dense"):
-            dscore = _dense_scores(question, chunks, meta)
+            _t = time.perf_counter()
+            dscore = _dense_scores(question, chunks, meta, qvec=qvec,
+                                   qvec_model=qvec_model)
+            tm["dense"] = time.perf_counter() - _t
             if dscore is not None:
                 dense_ranked = sorted(range(len(chunks)),
                                       key=lambda i: dscore[i], reverse=True)
@@ -1602,7 +1825,10 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
             # BM25 + query-time rerank (un-embedded index, hybrid off, or the
             # embedder was unreachable). Identical to the pre-hybrid behavior.
             cand_ids = [i for i in ranked if scores[i] > 0][:RERANK_CAND_N]
-            order = _rerank_by_embedding(question, chunks, cand_ids)
+            _t = time.perf_counter()
+            order = _rerank_by_embedding(question, chunks, cand_ids, qvec=qvec,
+                                         qvec_model=qvec_model)
+            tm["rerank"] = time.perf_counter() - _t
         if persona == "parent" and order:
             order = _diversify_order(order, chunks, keep_k,
                                      PARENT_MAX_PER_SOURCE)
@@ -1614,13 +1840,16 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
             except Exception:
                 top_score = 0.0
     vsrc = vault_sources(retrieved)
+    tm["mode"] = mode
     run.done("bm25", "%d chunks · %s · top score %.1f · %s" % (
         len(retrieved), mode, top_score, _short_srcs(vsrc)) if retrieved
         else "no lexical matches")
 
     # --- Retrieval: wikilink expansion -----------------------------------
     run.running("expand")
+    _t = time.perf_counter()
     added, linked_ids = expand_with_links(retrieved, scores, meta)
+    tm["expand"] = time.perf_counter() - _t
     context_chunks = retrieved + added
     if added:
         run.done("expand", "+%d linked chunks (%d total)" % (
@@ -1641,12 +1870,41 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     run.running("model")
     system_prompt = PARENT_SYSTEM if persona == "parent" else VAULT_FIRST_SYSTEM
     vault_messages = [{"role": "system", "content": system_prompt}]
-    vault_messages.extend(history)
+    vault_messages.extend(history[-PHASE1_HISTORY_MSGS:] if history else [])
     vault_messages.append(
         {"role": "user", "content": build_first_pass_user(
             question, context_chunks, linked_ids)}
     )
-    first = chat_once(model, vault_messages).strip()
+    _t = time.perf_counter()
+    _reset_chat_stats()
+    first = None
+    streamed = False
+    _live_sink = []
+    if STREAM_PHASE1 and context_chunks:
+        # Holdback streaming: the head is buffered until the INSUFFICIENT
+        # decision is safe, then the answer renders live. A refusal aborts the
+        # stream with nothing shown and falls through to the branches below,
+        # exactly like the blocking path. The sink is kept so the grounding
+        # footer can be appended after the stream ends.
+        def _begin_stream():
+            tm["ttft"] = time.perf_counter() - _t
+            run.done("model", "streaming from vault")
+            run.skip("web", "vault answer sufficient")
+            s = run.begin_answer()
+            _live_sink.append(s)
+            return s
+
+        text, streamed = chat_stream_holdback(
+            model, vault_messages, _is_insufficient, _begin_stream)
+        if text is not None:
+            first = text.strip()
+    if first is None:
+        # Streaming off, no context chunks, or the stream failed before
+        # anything was emitted: the original blocking call.
+        streamed = False
+        first = chat_once(model, vault_messages).strip()
+    tm["phase1"] = time.perf_counter() - _t
+    tm.update(LAST_CHAT_STATS)
 
     if first.startswith("[error]"):
         run.fail("model", first[:80])
@@ -1654,21 +1912,30 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
         run.finish()
         return "", []
 
-    vault_ok = bool(context_chunks) and not _is_insufficient(first)
+    # Once tokens have streamed, the turn is committed to the vault answer:
+    # decide() already ruled out a refusal on the text's decision window, and
+    # re-branching to the web after visible output would corrupt the UI.
+    vault_ok = streamed or (bool(context_chunks) and not _is_insufficient(first))
 
     # Case C: the vault answered. Stream the answer we already computed.
     if vault_ok:
-        run.done("model", "%d tokens · from vault" % len(tokenize(first)))
-        run.skip("web", "vault answer sufficient")
         _flags = faithfulness_flags(
             first, format_vault_context(context_chunks, linked_ids))
+        footer = ""
         if _flags:
-            first = first.rstrip() + (
-                "\n\n[grounding check - not found in the retrieved "
-                "vault sources, treat as unverified: "
-                + ", ".join(_flags) + "]")
-        sink = run.begin_answer()
-        sink(first)
+            footer = ("\n\n[grounding check - not found in the retrieved "
+                      "vault sources, treat as unverified: "
+                      + ", ".join(_flags) + "]")
+            first = first.rstrip() + footer
+        if streamed and _live_sink:
+            # The answer body already rendered live; only the footer remains.
+            if footer:
+                _live_sink[0](footer)
+        else:
+            run.done("model", "%d tokens · from vault" % len(tokenize(first)))
+            run.skip("web", "vault answer sufficient")
+            sink = run.begin_answer()
+            sink(first)
         return _finish(run, history, question, first,
                        vault_sources(context_chunks))
 
@@ -1691,7 +1958,9 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     route_messages = [{"role": "system", "content": ROUTE_SYSTEM}]
     route_messages.extend(history)
     route_messages.append({"role": "user", "content": route_user})
+    _t = time.perf_counter()
     route = chat_once(model, route_messages).strip()
+    tm["route"] = time.perf_counter() - _t
     if route.startswith("[error]"):
         route = "SEARCH: " + question
 
@@ -1706,7 +1975,9 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
         url = normalize_url(first[len("FETCH:"):])
         if url:
             run.running("web", "fetching " + url)
+            _t = time.perf_counter()
             text = fetch_page(url)
+            tm["web"] = tm.get("web", 0.0) + (time.perf_counter() - _t)
             if text:
                 run.done("web", "fetched " + url)
                 doc_messages = [{"role": "system", "content": DOC_SYSTEM}]
@@ -1720,7 +1991,9 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
                 return _finish(run, history, question, answer, [url])
         # Direct fetch failed: fall back to a web search, then the vault.
         run.running("web", "direct fetch failed, searching")
+        _t = time.perf_counter()
         excerpts = gather_web_context(question)
+        tm["web"] = tm.get("web", 0.0) + (time.perf_counter() - _t)
         if excerpts:
             run.done("web", "DuckDuckGo · %d results" % len(excerpts))
             return _answer_from_excerpts(model, question, excerpts,
@@ -1733,7 +2006,9 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
     # the web-off case already returned above).
     query = first[len("SEARCH:"):].strip() or question
     run.running("web", "searching: " + query[:40])
+    _t = time.perf_counter()
     excerpts = gather_web_context(query)
+    tm["web"] = tm.get("web", 0.0) + (time.perf_counter() - _t)
     if not excerpts:
         run.skip("web", "no usable web results")
         return _answer_no_web(model, question, context_chunks, linked_ids,
@@ -1999,6 +2274,10 @@ def main():
         # the plain path still answers instead of crashing on run.* calls.
         run = ui.start_run(q_model) if ui is not None else _NullRun()
 
+        # Question embedding captured from the semantic router's miss, reused by
+        # hybrid dense retrieval so a fresh turn embeds the question ONCE.
+        sem_qvec = None
+
         # Fast path: serve from the answer cache before retrieval or a model call.
         # Deep (/deep) answers bypass the cache so they never collide with a fast draft.
         if cache_enabled and cache is not None and not deep_once and not parent_once:
@@ -2026,9 +2305,9 @@ def main():
             # exactly one concept, otherwise returns None and we compute fresh.
             if semantic is not None:
                 try:
-                    m = semantic.match(question)
+                    m, sem_qvec = semantic.match_with_vec(question)
                 except Exception:
-                    m = None
+                    m, sem_qvec = None, None
                 if m and (m.get("answer") or "").strip():
                     sem_answer = m["answer"]
                     run.done("cache", "semantic hit · %s (cos %.2f)" % (
@@ -2052,7 +2331,10 @@ def main():
         try:
             answer, sources = handle_question(
                 q_model, question, history, bm25, chunks, meta, web_enabled, run,
-                persona="parent" if parent_once else "default"
+                persona="parent" if parent_once else "default",
+                qvec=sem_qvec,
+                qvec_model=(getattr(semantic, "model", None)
+                            if semantic is not None else None),
             )
         except KeyboardInterrupt:
             run.finish()

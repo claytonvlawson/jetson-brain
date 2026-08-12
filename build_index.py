@@ -421,55 +421,121 @@ def _strip_yaml_scalar(value):
     return value.strip()
 
 
-def parse_aliases(frontmatter_text):
-    # Best-effort parse of a simple YAML "aliases:" key from the frontmatter
-    # block. Handles:
-    #   aliases: foo
-    #   aliases: [foo, bar]
-    #   aliases:
-    #     - foo
-    #     - bar
-    # Returns a list of raw alias strings (not normalized). Never raises.
+# Frontmatter keys surfaced into the index. List keys accept an inline
+# [a, b] form, a single scalar, or a block "- item" list; scalar keys take the
+# rest of the line. "alias" folds into "aliases" so both spellings work.
+_FM_LIST_KEYS = {"aliases": "aliases", "alias": "aliases",
+                 "tags": "tags", "authors": "authors"}
+_FM_SCALAR_KEYS = ("name", "type", "year", "venue", "doi", "citekey", "url")
+
+
+def _parse_yaml_list(lines, i, rest):
+    # Parse one list-valued key starting at line i whose post-colon text is
+    # `rest`. Returns the item list. Block items are the "- item" lines that
+    # follow; any non-indented, non-list line ends the block.
+    items = []
+    if rest:
+        if rest.startswith("[") and rest.endswith("]"):
+            for part in rest[1:-1].split(","):
+                val = _strip_yaml_scalar(part)
+                if val:
+                    items.append(val)
+        else:
+            val = _strip_yaml_scalar(rest)
+            if val:
+                items.append(val)
+        return items
+    for j in range(i + 1, len(lines)):
+        item = lines[j]
+        if not item.strip():
+            continue
+        lm = re.match(r"^\s*-\s+(.*)$", item)
+        if lm:
+            val = _strip_yaml_scalar(lm.group(1))
+            if val:
+                items.append(val)
+        elif not (item.startswith(" ") or item.startswith("\t")):
+            break
+    return items
+
+
+def parse_frontmatter_fields(frontmatter_text):
+    # Best-effort parse of the flat YAML used across this vault. Returns a dict
+    # holding any of: aliases/tags/authors (lists) and name/type/year/venue/
+    # doi/citekey/url (strings). Missing or empty keys are absent. Only
+    # top-level (non-indented) keys are read, so nested blocks never leak in.
+    # First writer wins per key. Never raises.
+    fields = {}
     if not frontmatter_text:
-        return []
+        return fields
     lines = frontmatter_text.split("\n")
-    aliases = []
-    n = len(lines)
-    for i in range(n):
-        line = lines[i]
-        m = re.match(r"^\s*(?:aliases|alias)\s*:\s*(.*)$", line, re.IGNORECASE)
+    for i, line in enumerate(lines):
+        m = re.match(r"^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$", line)
         if not m:
             continue
-        rest = m.group(1).strip()
-        if rest:
-            # Inline value: either [a, b, c] or a single scalar.
-            if rest.startswith("[") and rest.endswith("]"):
-                inner = rest[1:-1]
-                for part in inner.split(","):
-                    val = _strip_yaml_scalar(part)
-                    if val:
-                        aliases.append(val)
-            else:
+        key = m.group(1).lower()
+        rest = m.group(2).strip()
+        if key in _FM_LIST_KEYS:
+            canon = _FM_LIST_KEYS[key]
+            if canon not in fields:
+                items = _parse_yaml_list(lines, i, rest)
+                if items:
+                    fields[canon] = items
+        elif key in _FM_SCALAR_KEYS:
+            if key not in fields:
                 val = _strip_yaml_scalar(rest)
                 if val:
-                    aliases.append(val)
-        else:
-            # Block list: subsequent "- item" lines.
-            for j in range(i + 1, n):
-                item = lines[j]
-                if not item.strip():
-                    continue
-                lm = re.match(r"^\s*-\s+(.*)$", item)
-                if lm:
-                    val = _strip_yaml_scalar(lm.group(1))
-                    if val:
-                        aliases.append(val)
-                elif not (item.startswith(" ") or item.startswith("\t")):
-                    # A non-list, non-indented line ends the aliases block.
-                    break
-        # Only honor the first aliases key encountered.
-        break
-    return aliases
+                    fields[key] = val
+    return fields
+
+
+def parse_aliases(frontmatter_text):
+    # Back-compat wrapper: the raw "aliases:" list (see parse_frontmatter_fields).
+    return parse_frontmatter_fields(frontmatter_text).get("aliases", [])
+
+
+def apply_meta(chunk_texts, frontmatter, meta, fallback_title, title):
+    """Inject the frontmatter metadata sentence into one note's chunk list
+    according to the meta mode. SHARED by build() and update_index._chunk_file
+    so a full build and an incremental update produce identical chunks for the
+    same note (the index records its mode as index[\"meta_mode\"]). Mutates and
+    returns (chunk_texts, injected)."""
+    if meta == "none":
+        return chunk_texts, False
+    sentence = fm_meta_sentence(parse_frontmatter_fields(frontmatter))
+    if not sentence:
+        return chunk_texts, False
+    if meta == "inline" and chunk_texts:
+        chunk_texts[0] = chunk_texts[0].rstrip() + "\n" + sentence
+    else:
+        # 'chunk' mode, or a frontmatter-only note with no body chunks.
+        prefix = _crumb_prefix(fallback_title, title, [])
+        chunk_texts.insert(0, prefix + "\n" + sentence)
+    return chunk_texts, True
+
+
+def fm_meta_sentence(fields):
+    # Compact metadata sentence injected into the note's first chunk (--meta
+    # inline) or emitted as a synthetic lead chunk (--meta chunk) so the
+    # Sources/ frontmatter finally reaches BM25 and the dense vectors: author
+    # first names, venue, year, DOI, and citekey are otherwise invisible to
+    # retrieval (frontmatter is stripped before chunking).
+    parts = []
+    if fields.get("name"):
+        parts.append("Source: %s." % fields["name"])
+    if fields.get("authors"):
+        parts.append("Authors: %s." % ", ".join(fields["authors"]))
+    if fields.get("year"):
+        parts.append("Year: %s." % fields["year"])
+    if fields.get("venue"):
+        parts.append("Published in %s." % fields["venue"])
+    if fields.get("doi"):
+        parts.append("DOI: %s." % fields["doi"])
+    if fields.get("citekey"):
+        parts.append("Citekey: %s." % fields["citekey"])
+    if fields.get("tags"):
+        parts.append("Tags: %s." % ", ".join(fields["tags"]))
+    return " ".join(parts)
 
 
 def extract_wikilink_targets(text):
@@ -528,7 +594,7 @@ _JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv"}
 
 
 def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
-          ollama_host=DEFAULT_OLLAMA_HOST):
+          ollama_host=DEFAULT_OLLAMA_HOST, meta="inline"):
     if not os.path.isdir(vault):
         print("ERROR: vault directory not found: %s" % vault)
         return 1
@@ -549,6 +615,7 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
 
     chunks = []
     next_id = 0
+    meta_notes = 0
 
     by_source = {}
     link_map = {}
@@ -573,17 +640,37 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
 
         frontmatter, body_no_fm = split_frontmatter(raw)
         title = extract_title(body_no_fm, fallback_title)
+        fm_fields = parse_frontmatter_fields(frontmatter)
 
         # Parse links and urls from the raw post-frontmatter text, BEFORE
         # clean_obsidian strips the wikilink syntax away.
         link_targets = extract_wikilink_targets(body_no_fm)
         urls = extract_urls(body_no_fm)
 
+        # A frontmatter url: is the note's canonical external link; merge it in
+        # ahead of body urls so the phase-2 FETCH candidate list can see it.
+        fm_url = fm_fields.get("url", "")
+        if fm_url.startswith(("http://", "https://")):
+            if fm_url in urls:
+                urls.remove(fm_url)
+            urls.insert(0, fm_url)
+            urls = urls[:MAX_URLS_PER_NOTE]
+
         # Structure-aware chunking: section on headings, merge tiny sections,
         # split oversized ones on sentence boundaries, and prepend the heading
         # breadcrumb to each chunk (see chunk_note).
+        chunk_texts = chunk_note(body_no_fm, title, fallback_title)
+
+        # Surface frontmatter metadata into retrieval (see apply_meta):
+        # inline appends to the note's first chunk; chunk (and any
+        # frontmatter-only note) gets a synthetic lead chunk.
+        chunk_texts, injected = apply_meta(
+            chunk_texts, frontmatter, meta, fallback_title, title)
+        if injected:
+            meta_notes += 1
+
         by_source.setdefault(rel_source, [])
-        for chunk_text in chunk_note(body_no_fm, title, fallback_title):
+        for chunk_text in chunk_texts:
             toks = tokenize(chunk_text)
             if not toks:
                 # Nothing tokenizable (punctuation-only); skip so that
@@ -599,10 +686,14 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
             by_source[rel_source].append(next_id)
             next_id += 1
 
-        # Register link_map keys for this note. First writer wins.
+        # Register link_map keys for this note. First writer wins. The
+        # frontmatter name: joins the aliases so [[name-style]] references and
+        # wikilink expansion resolve on it too.
         stem = os.path.splitext(os.path.basename(rel_source))[0]
         rel_no_ext = os.path.splitext(rel_source)[0]
-        aliases = parse_aliases(frontmatter)
+        aliases = list(fm_fields.get("aliases", []))
+        if fm_fields.get("name"):
+            aliases.append(fm_fields["name"])
         for key in [stem, rel_no_ext] + aliases:
             nk = normalize_key(key)
             if nk and nk not in link_map:
@@ -651,6 +742,7 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
     index = {
         "version": 4,
         "tokenizer_version": TOKENIZER_VERSION,
+        "meta_mode": meta,
         "chunks": chunks,
         "by_source": by_source,
         "link_map": link_map,
@@ -683,6 +775,7 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
 
     print("Files scanned:  %d" % len(md_files))
     print("Chunks built:   %d" % len(chunks))
+    print("Metadata notes: %d (--meta %s)" % (meta_notes, meta))
     print("Link map keys:  %d" % len(link_map))
     print("Outgoing links: %d note(s), %d resolved link(s)" % (notes_with_links, total_links))
     print("Reference URLs: %d note(s), %d url(s)" % (notes_with_urls, total_urls))
@@ -714,9 +807,15 @@ def main():
                              "Must match brain.py's index dense model.")
     parser.add_argument("--ollama-host", default=DEFAULT_OLLAMA_HOST,
                         help="Ollama host for --embed (default %(default)s).")
+    parser.add_argument("--meta", choices=("none", "inline", "chunk"), default="inline",
+                        help="How frontmatter metadata enters retrieval: none "
+                             "(pre-A1 behavior), inline (append a metadata "
+                             "sentence to each note's first chunk, default), or "
+                             "chunk (emit it as a synthetic lead chunk).")
     args = parser.parse_args()
     return build(args.vault, args.out, embed=args.embed,
-                 embed_model=args.embed_model, ollama_host=args.ollama_host)
+                 embed_model=args.embed_model, ollama_host=args.ollama_host,
+                 meta=args.meta)
 
 
 if __name__ == "__main__":

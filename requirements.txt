@@ -4,3 +4,8 @@ ddgs
 beautifulsoup4
 requests
 mediapipe
+# research agent (discovery uses stdlib; these unlock full-text retrieval
+# and the Cloudflare-fronted Clerc Center pages)
+curl_cffi
+pypdf
+trafilatura

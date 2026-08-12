@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -54,8 +54,13 @@ ssh "${JETSON}" "mkdir -p '${REMOTE}/vault' '${REMOTE}/index'"
 
 # ---- Sync the vault (markdown only) -------------------------------------
 echo "==> Syncing vault markdown (md only) to ${REMOTE}/vault/ ..."
+# _WebCache and _Research are Jetson-authoritative machine-managed folders
+# (web fetches and approved research-agent notes); excluding them keeps
+# --delete from destroying them and keeps the Mac copy (research-pull.sh)
+# from round-tripping back.
 rsync -az --delete --prune-empty-dirs \
   --exclude='_WebCache/' \
+  --exclude='_Research/' \
   --include='*/' --include='*.md' --exclude='*' \
   "${VAULT_SRC}/" "${JETSON}:${REMOTE}/vault/"
 
@@ -84,6 +89,7 @@ scp -q \
   "${HERE}/gold_questions.jsonl" \
   "${HERE}/heldout_gold.jsonl" \
   "${HERE}/parent_gold.jsonl" \
+  "${HERE}/meta_gold.jsonl" \
   "${HERE}/install.sh" \
   "${HERE}/requirements.txt" \
   "${HERE}/jetson-online.sh" \
@@ -105,6 +111,14 @@ scp -q \
   "${HERE}/refresh_web.py" \
   "${HERE}/brain-learn.service" \
   "${HERE}/brain-learn.timer" \
+  "${HERE}/semantic_cache.py" \
+  "${HERE}/research_sources.py" \
+  "${HERE}/research_fetch.py" \
+  "${HERE}/research_note.py" \
+  "${HERE}/research_agent.py" \
+  "${HERE}/research_review.py" \
+  "${HERE}/research-agent.service" \
+  "${HERE}/research-agent.timer" \
   "${JETSON}:${REMOTE}/"
 
 # ---- Make scripts executable and install --------------------------------

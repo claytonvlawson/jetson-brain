@@ -134,18 +134,27 @@ class SemanticCache:
     def match(self, question):
         """Return {answer, sources, concept, score, margin} if a confident,
         unambiguous concept match exists, else None. Never raises."""
+        return self.match_with_vec(question)[0]
+
+    def match_with_vec(self, question):
+        """Like match(), but returns (result_or_None, normalized_qvec_or_None).
+
+        The question embedding computed here is the SAME vector hybrid dense
+        retrieval needs (same model, same normalization), so on a router miss
+        the caller can hand it to brain._dense_scores and save one Ollama
+        embeddings round-trip per fresh turn. Never raises."""
         if not self.ready or not question:
-            return None
+            return None, None
         try:
             qvec = _embed(question, self.host, self.model, self.timeout)
             if not qvec:
-                return None
+                return None, None
             qvec = _normalize(qvec)
             scored = sorted(
                 ((_dot(qvec, v), cid) for cid, v in self.vecs.items()),
                 reverse=True)
             if not scored:
-                return None
+                return None, qvec
             top_score, top_id = scored[0]
             second = scored[1][0] if len(scored) > 1 else 0.0
             if top_score >= self.threshold and (top_score - second) >= self.margin:
@@ -155,7 +164,7 @@ class SemanticCache:
                     "concept": top_id,
                     "score": round(top_score, 4),
                     "margin": round(top_score - second, 4),
-                }
-            return None
+                }, qvec
+            return None, qvec
         except Exception:
-            return None
+            return None, None

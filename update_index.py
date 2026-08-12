@@ -8,12 +8,15 @@ This script folds them in incrementally, in seconds, so the brain that just
 searched the web can answer from that knowledge on the very next question
 (brain.py hot-reloads the index when the pickle's mtime changes).
 
-Scope is deliberately narrow: ONLY sources under the _WebCache/ folder are
+Scope is deliberately narrow: ONLY sources under the MANAGED_DIRS folders
+(_WebCache/ for web fetches, _Research/ for reviewed research-agent notes) are
 added, replaced, or removed. Hand-authored vault notes are never touched here;
 they still flow through the full build_index.py rebuild at deploy time. That
-containment is the safety story: automatic learning cannot corrupt or displace
-the curated vault, and purging a bad web note (refresh_web.py --purge) followed
-by one run of this script removes every trace of it from retrieval.
+containment is the safety story: automation can only ever touch the
+machine-managed underscore folders, so it cannot corrupt or displace the
+curated vault, and purging a bad note (refresh_web.py --purge, or
+research_review.py retire) followed by one run of this script removes every
+trace of it from retrieval.
 
 Mechanics per run:
   1. Take a lock file next to the pickle (skip silently if another update is
@@ -49,17 +52,24 @@ import build_index as bi
 BRAIN_ROOT = os.environ.get("BRAIN_ROOT", "/mnt/nvme/brain")
 DEFAULT_VAULT = os.path.join(BRAIN_ROOT, "vault")
 DEFAULT_INDEX = os.path.join(BRAIN_ROOT, "index", "bm25.pkl")
-WEB_DIR_NAME = "_WebCache"
+# The machine-managed vault folders this script owns. Everything else in the
+# vault is hand-authored and out of scope. _WebCache holds web fetches
+# (web_cache.py); _Research holds research-agent notes a human approved
+# (research_review.py).
+MANAGED_DIRS = ("_WebCache", "_Research")
+WEB_DIR_NAME = MANAGED_DIRS[0]   # kept for older callers/tests
 LOCK_STALE_SECONDS = 600
 
-
-def _web_prefix():
-    return WEB_DIR_NAME + "/"
+_MANAGED_PREFIXES = tuple(d + "/" for d in MANAGED_DIRS)
 
 
-def _is_web_source(source):
+def _is_managed_source(source):
     s = str(source or "").replace("\\", "/")
-    return s.startswith(_web_prefix())
+    return s.startswith(_MANAGED_PREFIXES)
+
+
+# Backward-compatible alias (pre-_Research name).
+_is_web_source = _is_managed_source
 
 
 def _acquire_lock(lock_path):
@@ -90,9 +100,13 @@ def _release_lock(lock_path):
         pass
 
 
-def _chunk_file(path, rel_source):
-    """Chunk one web note exactly the way build_index.build() does. Returns
-    (chunk_texts, frontmatter, body) or None when the file is unreadable."""
+def _chunk_file(path, rel_source, meta_mode="none"):
+    """Chunk one web note exactly the way build_index.build() does, INCLUDING
+    the frontmatter metadata injection for the index's meta_mode (inject
+    before the tokenizable filter, mirroring build()'s order), so incremental
+    updates and full builds produce identical chunks and the unchanged-note
+    comparison never churns. Returns (chunk_texts, frontmatter, body, title)
+    or None when the file is unreadable."""
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
             raw = fh.read()
@@ -101,10 +115,10 @@ def _chunk_file(path, rel_source):
     fallback_title = os.path.splitext(os.path.basename(rel_source))[0]
     frontmatter, body_no_fm = bi.split_frontmatter(raw)
     title = bi.extract_title(body_no_fm, fallback_title)
-    texts = []
-    for chunk_text in bi.chunk_note(body_no_fm, title, fallback_title):
-        if bi.tokenize(chunk_text):
-            texts.append(chunk_text)
+    chunk_texts = list(bi.chunk_note(body_no_fm, title, fallback_title))
+    chunk_texts, _ = bi.apply_meta(
+        chunk_texts, frontmatter, meta_mode, fallback_title, title)
+    texts = [t for t in chunk_texts if bi.tokenize(t)]
     return texts, frontmatter, body_no_fm, title
 
 
@@ -116,7 +130,6 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
         if not quiet:
             print(msg)
 
-    web_dir = os.path.join(vault, WEB_DIR_NAME)
     if not os.path.exists(index_path):
         say("No index at %s; run build_index.py first." % index_path)
         return 1
@@ -138,28 +151,34 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
             return 1
 
         chunks = data["chunks"]
+        # The index records how frontmatter metadata entered its chunks;
+        # re-chunk the same way. Old pickles (no key) were built without it.
+        meta_mode = str(data.get("meta_mode") or "none")
         by_source = data.get("by_source") or {}
         link_map = data.get("link_map") or {}
         links_out = data.get("links_out") or {}
         urls_out = data.get("urls_out") or {}
 
-        # ---- Diff: index's web chunks vs the notes on disk ---------------
+        # ---- Diff: index's managed chunks vs the notes on disk -----------
         indexed = {}   # rel_source -> [chunk texts in order]
         for c in chunks:
             src = str(c.get("source") or "")
-            if _is_web_source(src):
+            if _is_managed_source(src):
                 indexed.setdefault(src, []).append(c.get("text") or "")
 
         on_disk = {}   # rel_source -> full path
-        if os.path.isdir(web_dir):
-            for name in sorted(os.listdir(web_dir)):
+        for dname in MANAGED_DIRS:
+            mdir = os.path.join(vault, dname)
+            if not os.path.isdir(mdir):
+                continue
+            for name in sorted(os.listdir(mdir)):
                 if name.lower().endswith(".md"):
-                    on_disk[_web_prefix() + name] = os.path.join(web_dir, name)
+                    on_disk[dname + "/" + name] = os.path.join(mdir, name)
 
         removed = [s for s in indexed if s not in on_disk]
         fresh = {}     # rel_source -> (texts, frontmatter, body, title)
         for src, path in on_disk.items():
-            parsed = _chunk_file(path, src)
+            parsed = _chunk_file(path, src, meta_mode)
             if parsed is None:
                 continue
             if src in indexed and indexed[src] == parsed[0]:
@@ -167,7 +186,7 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
             fresh[src] = parsed
 
         if not removed and not fresh:
-            say("Web knowledge already up to date (%d web notes indexed)."
+            say("Managed knowledge already up to date (%d notes indexed)."
                 % len(indexed))
             return 0
 
@@ -286,7 +305,7 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
             say("Could not write index: %s" % exc)
             return 1
 
-        say("Web knowledge folded in: +%d note(s) (%d chunk(s)), "
+        say("Managed knowledge folded in: +%d note(s) (%d chunk(s)), "
             "-%d removed, %d total chunks."
             % (len(fresh), len(new_chunks), len(removed), len(kept_chunks)))
         return 0
@@ -296,7 +315,8 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Fold _WebCache notes into bm25.pkl incrementally.")
+        description="Fold managed-folder notes (%s) into bm25.pkl incrementally."
+        % ", ".join(MANAGED_DIRS))
     ap.add_argument("--vault", default=DEFAULT_VAULT)
     ap.add_argument("--index", default=DEFAULT_INDEX)
     ap.add_argument("--ollama-host", default=bi.DEFAULT_OLLAMA_HOST)
