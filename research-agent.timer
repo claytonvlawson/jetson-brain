@@ -1,0 +1,14 @@
+# jetson-brain: run the research-literature discovery weekly, early Monday
+# morning. Deliberately offset from brain-learn.timer (Sun 03:30) so the two
+# never contend for Ollama or the index lock. Persistent=true catches up after
+# a powered-off week. See research-agent.service for install commands.
+[Unit]
+Description=jetson-brain weekly research-literature discovery timer
+
+[Timer]
+OnCalendar=Mon 04:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

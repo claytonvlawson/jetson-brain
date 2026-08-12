@@ -1,0 +1,23 @@
+# jetson-brain: weekly deaf-education literature discovery. Drafts candidate
+# papers (OpenAlex, ERIC, Clerc Center) into /mnt/nvme/brain/research/queue
+# for human review with research_review.py; nothing is indexed until approved.
+#
+# Install on the Jetson (sudo needs the password there):
+#   sudo cp /mnt/nvme/brain/research-agent.service /etc/systemd/system/
+#   sudo cp /mnt/nvme/brain/research-agent.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now research-agent.timer
+# Check:
+#   systemctl list-timers research-agent.timer
+#   journalctl -u research-agent.service -n 50
+[Unit]
+Description=jetson-brain weekly research-literature discovery
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=snowbeach
+WorkingDirectory=/mnt/nvme/brain
+ExecStart=/usr/bin/python3 /mnt/nvme/brain/research_agent.py --limit 25
+Nice=10
