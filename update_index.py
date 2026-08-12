@@ -115,11 +115,12 @@ def _chunk_file(path, rel_source, meta_mode="none"):
     fallback_title = os.path.splitext(os.path.basename(rel_source))[0]
     frontmatter, body_no_fm = bi.split_frontmatter(raw)
     title = bi.extract_title(body_no_fm, fallback_title)
-    chunk_texts = list(bi.chunk_note(body_no_fm, title, fallback_title))
-    chunk_texts, _ = bi.apply_meta(
-        chunk_texts, frontmatter, meta_mode, fallback_title, title)
+    chunk_texts, _, has_card = bi.build_note_chunks(
+        body_no_fm, frontmatter, title, fallback_title, meta_mode)
     texts = [t for t in chunk_texts if bi.tokenize(t)]
-    return texts, frontmatter, body_no_fm, title
+    # The card, when present, is chunk_texts[0] and always tokenizes, so it
+    # survives the filter at position 0.
+    return texts, frontmatter, body_no_fm, title, has_card
 
 
 def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
@@ -176,7 +177,7 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
                     on_disk[dname + "/" + name] = os.path.join(mdir, name)
 
         removed = [s for s in indexed if s not in on_disk]
-        fresh = {}     # rel_source -> (texts, frontmatter, body, title)
+        fresh = {}     # rel_source -> (texts, frontmatter, body, title, has_card)
         for src, path in on_disk.items():
             parsed = _chunk_file(path, src, meta_mode)
             if parsed is None:
@@ -212,11 +213,13 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
         next_id = max((c.get("id", -1) for c in chunks), default=-1) + 1
         new_chunks = []
         for src in sorted(fresh):
-            texts, frontmatter, body, title = fresh[src]
+            texts, frontmatter, body, title, has_card = fresh[src]
             ids_for_src = []
-            for text in texts:
+            for pos, text in enumerate(texts):
                 chunk = {"id": next_id, "text": text,
                          "source": src, "title": title}
+                if has_card and pos == 0:
+                    chunk["card"] = True
                 new_chunks.append(chunk)
                 ids_for_src.append(next_id)
                 next_id += 1

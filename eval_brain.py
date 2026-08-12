@@ -294,6 +294,19 @@ ISO_VIOL_TEMPLATE = (
 )
 
 
+# Isolated-judge call tallies for the run. The conservative failure defaults
+# below are correct per call but catastrophic in aggregate if the judge is
+# simply DOWN: every fact defaults to "not present" and the run reports a clean,
+# entirely believable 0/28 that looks like a system failure instead of a
+# measurement failure. This happened for real. Answering pins llama3.2:3b with
+# KEEP_ALIVE_FAST=-1, so on a 7GB Orin a --judge-model qwen2.5:7b cannot load
+# afterwards; 165 judge calls errored out in 16 seconds total (~0.1s each, i.e.
+# no inference at all) and the run scored 0/28 with every fact "missing" while
+# the answers underneath were perfectly good. Counting outcomes lets main()
+# tell the two apart and exit 4 (judge unreachable) instead of 5 (failed).
+ISO_CALLS = {"ok": 0, "failed": 0}
+
+
 def _iso_bool(template, key, filler, judge_model, host, retries, timeout, default):
     """Ask one isolated yes/no question and return the boolean. `default` on failure."""
     prompt = template.format(**filler)
@@ -305,7 +318,9 @@ def _iso_bool(template, key, filler, judge_model, host, retries, timeout, defaul
         content = _ollama_chat(judge_model, messages, host, True, timeout)
         obj = _extract_json(content)
         if isinstance(obj, dict) and key in obj:
+            ISO_CALLS["ok"] += 1
             return bool(obj.get(key))
+    ISO_CALLS["failed"] += 1
     return default
 
 
@@ -391,6 +406,47 @@ def judge(question, answer, must_cover, must_not, judge_model, host, retries, ti
 
 
 # -- gold loading -------------------------------------------------------------
+def report_gaps(results, the_brain):
+    """For every must_cover fact the judge scored MISSING, count how many index
+    chunks contain its distinctive terms.
+
+    A failing question has two very different causes that look identical in the
+    score: the retriever did not find the fact, or the fact is not in the vault
+    at all. Only the first is fixable by tuning. "Who founded Gallaudet
+    University and what law made it possible?" cannot be answered at any
+    retrieval quality, because `Amos Kendall` and `Lincoln` appear in zero
+    chunks. This separates the two so tuning effort goes where it can pay.
+
+    Returns a list of {id, fact, terms, chunks}. Never raises."""
+    out = []
+    try:
+        chunks = getattr(the_brain, "chunks", None) or []
+        # Distinctive terms only: a fact's rare words decide whether it is in
+        # the corpus. Scoring on common words would report every fact covered.
+        doc_freq = {}
+        tokenized = []
+        for c in chunks:
+            toks = set(brain.tokenize(c.get("text") or ""))
+            tokenized.append(toks)
+            for t in toks:
+                doc_freq[t] = doc_freq.get(t, 0) + 1
+        n = max(len(chunks), 1)
+        for r in results:
+            for fact in r.get("missing") or []:
+                terms = [t for t in brain.query_tokens(fact)
+                         if doc_freq.get(t, 0) <= n * 0.10]
+                terms = sorted(terms, key=lambda t: doc_freq.get(t, 0))[:4]
+                if not terms:
+                    continue
+                hits = sum(1 for toks in tokenized
+                           if all(t in toks for t in terms))
+                out.append({"id": r["id"], "fact": fact,
+                            "terms": terms, "chunks": hits})
+    except Exception:
+        return out
+    return out
+
+
 def load_gold(path):
     """Read gold_questions.jsonl into a list of dicts. Skips blank/comment lines
     and malformed rows (with a stderr note). Returns []. Never raises."""
@@ -491,6 +547,9 @@ def build_parser():
     p.add_argument("--no-cache", action="store_true", help="force fresh RAG, ignore cache")
     p.add_argument("--two-phase", action="store_true",
                    help="answer all, then judge all (one model load per phase; fast on 8GB)")
+    p.add_argument("--report-gaps", action="store_true",
+                   help="for each missed fact, count vault chunks containing it "
+                        "(separates content gaps from retrieval gaps)")
     p.add_argument("--semantic", action="store_true",
                    help="enable the embedding concept-router (widens coverage past lexical match)")
     p.add_argument("--embed-model", default="nomic-embed-text", help="embedding model for --semantic")
@@ -648,10 +707,30 @@ def main():
     elapsed = time.time() - start
     failed = [r for r in results if r["score"] < args.threshold]
 
+    gaps = report_gaps(results, the_brain) if args.report_gaps else []
+    if gaps and not args.as_json:
+        print("")
+        print("Vault coverage of missed facts (%d checked)" % len(gaps))
+        print("-" * 72)
+        uncovered = [g for g in gaps if g["chunks"] == 0]
+        thin = [g for g in gaps if 0 < g["chunks"] <= 2]
+        if uncovered:
+            print("NOT IN THE VAULT -- no retrieval change can fix these:")
+            for g in uncovered:
+                print("  [%s] %s" % (g["id"], g["fact"][:88]))
+                print("      0 chunks contain: %s" % ", ".join(g["terms"]))
+        if thin:
+            print("THIN (1-2 chunks) -- present but easy to miss:")
+            for g in thin:
+                print("  [%s] %-64s %d chunk(s)" % (g["id"], g["fact"][:64], g["chunks"]))
+        if not uncovered and not thin:
+            print("  Every missed fact is well covered in the vault; these are")
+            print("  retrieval or generation failures, not content gaps.")
+
     if args.as_json:
         print(json.dumps({
             "gold": args.gold, "model": args.model, "judge": args.judge_model,
-            "threshold": args.threshold, "results": results,
+            "threshold": args.threshold, "results": results, "gaps": gaps,
             "passed": len([r for r in results if r["score"] >= args.threshold]),
             "failed": len([r for r in results if 0 <= r["score"] < args.threshold]),
             "judge_failures": len([r for r in results if r["score"] < 0]),
@@ -664,6 +743,20 @@ def main():
 
     # Exit 4 if the ONLY reason for failure is an unreachable judge.
     if any(r["score"] < 0 for r in results) and not any(0 <= r["score"] < args.threshold for r in results):
+        return 4
+
+    # Same verdict for the isolated judge, which cannot signal -1: it degrades
+    # to "fact not present" per call, so a dead judge yields a plausible-looking
+    # all-zeros run. A majority of failed calls means the SCORES ARE INVALID and
+    # must not be read as a system result (see ISO_CALLS).
+    total_iso = ISO_CALLS["ok"] + ISO_CALLS["failed"]
+    if total_iso and ISO_CALLS["failed"] > total_iso / 2:
+        msg = ("JUDGE UNRELIABLE: %d of %d isolated judge calls failed. Scores in "
+               "this run are meaningless, not a system result.\n"
+               "  A 7B judge cannot load after answering pins llama3.2:3b "
+               "(KEEP_ALIVE_FAST=-1) on an 8GB board. Re-run with the default "
+               "judge (--judge-model %s)." % (ISO_CALLS["failed"], total_iso, args.model))
+        print(msg, file=sys.stderr)
         return 4
     return 5 if failed else 0
 

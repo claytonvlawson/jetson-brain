@@ -39,6 +39,21 @@ CHUNK_WORDS = 220        # TARGET: flush an accumulating chunk at ~this size
 FLOOR_WORDS = 90         # sections smaller than this get merged with neighbors
 CEIL_WORDS = 320         # sections larger than this get split (sentence-safe)
 
+# v5 definition card. Every note also emits ONE short synthetic lead chunk
+# holding its identity facts: title, frontmatter scalars, aliases, tags, and the
+# note's single most answer-dense line (an [!abstract]-style callout body, else
+# the first sentence after the H1).
+#
+# This exists because BM25 length-normalizes (rank_bm25 b=0.75 divides by
+# |d|/avgdl), so a short answer-dense doc outranks the same terms diluted across
+# a long one. FLOOR_WORDS=90 merges a 25-word one-line summary into a 250-word
+# prose blob, which is exactly the chunk a short factual question needs and
+# exactly the chunk that merging destroys. The card restores it WITHOUT changing
+# the prose chunks: "Where is Gallaudet University?" now has a ~40-word doc
+# reading "Gallaudet University. Type: org. Founded: 1864. ... Federally
+# chartered Deaf university in Washington DC ..." to score against.
+CARD_MAX_WORDS = 70      # hard cap; a card longer than this stops being a card
+
 # Cap on external URLs captured per note.
 MAX_URLS_PER_NOTE = 20
 
@@ -179,6 +194,13 @@ def clean_obsidian(text):
     text = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", text)
     # Turn [[Link]] into "Link".
     text = re.sub(r"\[\[([^\]]*)\]\]", r"\1", text)
+    # Drop the callout TYPE marker but keep the callout TEXT: "> [!abstract]
+    # One-line" -> "One-line". Without this the type name tokenizes as a real
+    # term ("abstract", "note", "info") and lands in the index as noise on every
+    # note that uses callouts, while the prose it labels is what we want.
+    text = re.sub(r"\[!\w+\][-+]?", "", text)
+    # Strip leading blockquote markers so callout/quote bodies read as prose.
+    text = re.sub(r"(?m)^\s{0,3}>\s?", "", text)
     return text
 
 
@@ -428,6 +450,18 @@ _FM_LIST_KEYS = {"aliases": "aliases", "alias": "aliases",
                  "tags": "tags", "authors": "authors"}
 _FM_SCALAR_KEYS = ("name", "type", "year", "venue", "doi", "citekey", "url")
 
+# Any OTHER top-level scalar is captured too, under fields["extra"], so vault
+# facts held only in frontmatter reach the index. Gallaudet's "founded: 1864"
+# was invisible to retrieval until now purely because it is not in the tuple
+# above. Bookkeeping keys carry no answer and would only add per-note noise, so
+# they are dropped. fm_meta_sentence deliberately IGNORES extras and keeps its
+# original 7-field output, so existing chunks are byte-identical; only the new
+# definition card reads them.
+_FM_DENY_KEYS = frozenset({
+    "status", "created", "updated", "modified", "date", "cssclass", "cssclasses",
+    "publish", "permalink", "position", "id", "uid", "rating", "priority",
+})
+
 
 def _parse_yaml_list(lines, i, rest):
     # Parse one list-valued key starting at line i whose post-colon text is
@@ -462,10 +496,12 @@ def _parse_yaml_list(lines, i, rest):
 def parse_frontmatter_fields(frontmatter_text):
     # Best-effort parse of the flat YAML used across this vault. Returns a dict
     # holding any of: aliases/tags/authors (lists) and name/type/year/venue/
-    # doi/citekey/url (strings). Missing or empty keys are absent. Only
+    # doi/citekey/url (strings), plus every other top-level scalar under the
+    # "extra" key (see _FM_DENY_KEYS). Missing or empty keys are absent. Only
     # top-level (non-indented) keys are read, so nested blocks never leak in.
     # First writer wins per key. Never raises.
     fields = {}
+    extra = {}
     if not frontmatter_text:
         return fields
     lines = frontmatter_text.split("\n")
@@ -486,12 +522,161 @@ def parse_frontmatter_fields(frontmatter_text):
                 val = _strip_yaml_scalar(rest)
                 if val:
                     fields[key] = val
+        elif rest and key not in _FM_DENY_KEYS and key not in extra:
+            # Unknown scalar. Skip anything that opens a block (an empty rest
+            # means the value is on following indented lines, which this flat
+            # parser does not read) and anything list-shaped.
+            val = _strip_yaml_scalar(rest)
+            if val and not val.startswith(("[", "{", "|", ">")):
+                extra[key] = val
+    if extra:
+        fields["extra"] = extra
     return fields
 
 
 def parse_aliases(frontmatter_text):
     # Back-compat wrapper: the raw "aliases:" list (see parse_frontmatter_fields).
     return parse_frontmatter_fields(frontmatter_text).get("aliases", [])
+
+
+_CALLOUT_RE = re.compile(r"^\s{0,3}>\s*\[!(\w+)\]")
+_LIST_MARKER_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# Callout types that hold a definition rather than an aside. A [!warning] or
+# [!todo] body is not what a "what/where is X" question wants.
+_DEFINITION_CALLOUTS = frozenset({
+    "abstract", "summary", "tldr", "note", "info", "definition", "quote", "cite",
+})
+
+
+def _callout_body(lines, i):
+    """Text of the callout whose marker is at line i. The marker line's tail is
+    the callout's TITLE ("One-line"), not its content; the content is the
+    blockquote lines that follow."""
+    parts = []
+    for j in range(i + 1, len(lines)):
+        nxt = lines[j]
+        if not nxt.lstrip().startswith(">") or _CALLOUT_RE.match(nxt):
+            break
+        txt = nxt.lstrip()[1:].strip()
+        if txt:
+            parts.append(txt)
+    return clean_obsidian(" ".join(parts)).strip()
+
+
+def extract_definition(body_no_fm, note_title):
+    """The note's single most answer-dense line, for the definition card.
+
+    Three tiers, in order: the body of the first DEFINITIONAL callout (this
+    vault uses `> [!abstract] One-line` as its house style for exactly this),
+    else the first substantive prose line after the H1, else any callout body at
+    all. The last tier matters for notes whose only content is a callout: a
+    [!warning] is not a definition and must lose to real prose, but it still
+    beats emitting a card with no descriptive text. Returns "" when the note has
+    none of the three. Never raises."""
+    lines = body_no_fm.split("\n")
+
+    for i, line in enumerate(lines):
+        m = _CALLOUT_RE.match(line)
+        if not m or m.group(1).lower() not in _DEFINITION_CALLOUTS:
+            continue
+        body = _callout_body(lines, i)
+        if body:
+            return body
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith((">", "---", "|", "```")):
+            continue
+        if _HEADING_RE.match(line):
+            continue
+        text = clean_obsidian(_LIST_MARKER_RE.sub("", stripped)).strip()
+        # Skip a bare restatement of the title and checkbox/task lines.
+        if not text or text.startswith("[ ]") or text.lower() == note_title.lower():
+            continue
+        sents = _SENTENCE_SPLIT_RE.split(text)
+        return " ".join(sents[:2]).strip() if sents else text
+
+    for i, line in enumerate(lines):
+        if _CALLOUT_RE.match(line):
+            body = _callout_body(lines, i)
+            if body:
+                return body
+    return ""
+
+
+def note_card(fm_fields, note_title, stem, body_no_fm):
+    """One short synthetic chunk carrying a note's identity facts, or "" when
+    the note has nothing card-worthy. See CARD_MAX_WORDS for why this earns its
+    place. SHARED by build() and update_index via build_note_chunks()."""
+    facts = []
+    name = (fm_fields.get("name") or note_title or stem or "").strip()
+    if name:
+        facts.append(name.rstrip(".") + ".")
+
+    aliases = [a for a in fm_fields.get("aliases", []) if a]
+    if aliases:
+        facts.append("Also known as: %s." % ", ".join(aliases))
+
+    # Known scalars in their declared order, then any extras alphabetically, so
+    # a card's field order is stable across rebuilds (a churn-free diff).
+    for key in _FM_SCALAR_KEYS:
+        if key in ("name", "url"):
+            continue                       # name leads the card; url adds no terms
+        if fm_fields.get(key):
+            facts.append("%s: %s." % (key.capitalize(), fm_fields[key]))
+    for key in sorted(fm_fields.get("extra", {})):
+        facts.append("%s: %s." % (key.replace("_", " ").capitalize(),
+                                  fm_fields["extra"][key]))
+
+    if fm_fields.get("authors"):
+        facts.append("Authors: %s." % ", ".join(fm_fields["authors"]))
+    if fm_fields.get("tags"):
+        facts.append("Tags: %s." % ", ".join(fm_fields["tags"]))
+
+    definition = extract_definition(body_no_fm, note_title)
+    if definition:
+        facts.append(definition)
+
+    body = " ".join(f for f in facts if f).strip()
+    if not body:
+        return ""
+    # A card that needs truncating has stopped being a card, but a long tail is
+    # the definition sentence, so trim words rather than drop the whole thing.
+    words = body.split()
+    if len(words) > CARD_MAX_WORDS:
+        body = " ".join(words[:CARD_MAX_WORDS])
+    # A card with no more terms than its own breadcrumb already carries is pure
+    # duplication; require at least one fact beyond the bare title.
+    if len(facts) < 2:
+        return ""
+    return _crumb_prefix(stem, note_title, []) + "\n" + body
+
+
+def build_note_chunks(body_no_fm, frontmatter, title, fallback_title, meta):
+    """Produce one note's full chunk list: definition card first, then the
+    structure-aware prose chunks, then frontmatter meta injection.
+
+    THE shared seam between build() and update_index._chunk_file. Both must call
+    this and nothing else, or a full build and an incremental web-autolearn
+    update produce different chunks for the same note and every unchanged note
+    churns on the next update.
+
+    Returns (chunk_texts, meta_injected, has_card). When has_card is True the
+    card is chunk_texts[0]; callers flag that chunk so retrieval can prefer it
+    for fact-seeking questions (see brain._apply_card_boost)."""
+    fm_fields = parse_frontmatter_fields(frontmatter)
+    chunk_texts = list(chunk_note(body_no_fm, title, fallback_title))
+
+    # apply_meta with meta="inline" appends to chunk_texts[0], so the card must
+    # be inserted AFTER that call or the meta sentence lands on the card (which
+    # already carries those fields) instead of on the first prose chunk.
+    chunk_texts, injected = apply_meta(
+        chunk_texts, frontmatter, meta, fallback_title, title)
+
+    card = note_card(fm_fields, title, fallback_title, body_no_fm)
+    if card:
+        chunk_texts.insert(0, card)
+    return chunk_texts, injected, bool(card)
 
 
 def apply_meta(chunk_texts, frontmatter, meta, fallback_title, title):
@@ -656,33 +841,32 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
             urls.insert(0, fm_url)
             urls = urls[:MAX_URLS_PER_NOTE]
 
-        # Structure-aware chunking: section on headings, merge tiny sections,
-        # split oversized ones on sentence boundaries, and prepend the heading
-        # breadcrumb to each chunk (see chunk_note).
-        chunk_texts = chunk_note(body_no_fm, title, fallback_title)
-
-        # Surface frontmatter metadata into retrieval (see apply_meta):
-        # inline appends to the note's first chunk; chunk (and any
-        # frontmatter-only note) gets a synthetic lead chunk.
-        chunk_texts, injected = apply_meta(
-            chunk_texts, frontmatter, meta, fallback_title, title)
+        # Definition card + structure-aware prose chunks + frontmatter meta
+        # injection, all via the one seam update_index.py also calls.
+        chunk_texts, injected, has_card = build_note_chunks(
+            body_no_fm, frontmatter, title, fallback_title, meta)
         if injected:
             meta_notes += 1
 
         by_source.setdefault(rel_source, [])
-        for chunk_text in chunk_texts:
+        for pos, chunk_text in enumerate(chunk_texts):
             toks = tokenize(chunk_text)
             if not toks:
                 # Nothing tokenizable (punctuation-only); skip so that
                 # re-tokenizing this chunk at load can never yield an empty
                 # doc. The token list itself is NOT stored (see below).
                 continue
-            chunks.append({
+            row = {
                 "id": next_id,
                 "text": chunk_text,
                 "source": rel_source,
                 "title": title,
-            })
+            }
+            # Flag set only on cards, so the pickle carries one extra key per
+            # note rather than per chunk.
+            if has_card and pos == 0:
+                row["card"] = True
+            chunks.append(row)
             by_source[rel_source].append(next_id)
             next_id += 1
 
@@ -740,7 +924,11 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
     # block may be present; brain.py reads it only when present, so a v3 (no
     # dense) and a v4-without-dense index behave identically.
     index = {
-        "version": 4,
+        # 5: definition-card chunks, callout cleaning, and generalized
+        # frontmatter capture. Chunk TEXT changed, so a v4 pickle answers
+        # differently than a v5 one; the tokenizer did not, so
+        # TOKENIZER_VERSION is unchanged and old pickles still load.
+        "version": 5,
         "tokenizer_version": TOKENIZER_VERSION,
         "meta_mode": meta,
         "chunks": chunks,

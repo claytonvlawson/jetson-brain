@@ -406,6 +406,240 @@ def query_tokens(question):
 
 
 # ---------------------------------------------------------------------------
+# Question intent: answer-type expansion and multi-clause decomposition.
+#
+# Wh-words are correctly dropped from BM25 scoring (their IDF is ~0, so keeping
+# them bumps nearly every chunk and flattens the top-vs-rest gap). But dropping
+# them also throws away the ONE thing that distinguishes "Where is Gallaudet
+# University?" from "What is Gallaudet University?" -- both reduce to
+# {gallaudet, university} and retrieve the same chunks. The fix is not to score
+# the wh-word but to translate it into content terms that DO carry IDF, and to
+# tell the generator what shape of answer the question wants.
+# ---------------------------------------------------------------------------
+
+# Answer-type terms appended to the query bag. Stemmed at module load so they
+# match corpus tokens (_s_stem folds "outcomes" -> "outcome" etc.).
+_INTENT_EXPANSIONS = {
+    "where":  ("located", "location", "city", "address", "campus", "based"),
+    "when":   ("year", "founded", "date", "established", "century"),
+    "who":    ("founder", "founded", "director", "president", "author", "named"),
+    "how many": ("number", "count", "total", "percent"),
+    "how much": ("number", "cost", "percent", "rate"),
+}
+_INTENT_EXPANSIONS = {k: tuple(_s_stem(w) for w in v)
+                      for k, v in _INTENT_EXPANSIONS.items()}
+
+# A question this short with a concrete answer-type wants a fact, not an essay.
+FACTUAL_MAX_TOKENS = 12
+
+# Weight on the gated answer-type boost. Small on purpose: this reorders chunks
+# that already match the question, it does not compete with matching it.
+INTENT_BOOST_WEIGHT = 0.35
+
+MULTI_TOP_K = 8          # context slots for a multi-entity question
+
+# Multiplier on a definition card when the question asks for a fact. Modest:
+# the card should win among its OWN note's chunks, not outrank other notes.
+CARD_BOOST = 0.5
+
+# Max chunks from any one note for a multi-clause question. Tighter than the
+# parent cap (3): these questions name two or three entities outright, so 6
+# slots have to cover 3 notes.
+MULTI_MAX_PER_SOURCE = 2
+
+_WH_RE = re.compile(r"\b(how many|how much|where|when|who|whose|which|what|why|how)\b")
+
+# Clause separators for decomposition. The wh-word is kept with the clause it
+# introduces (lookahead, so only the "and" is consumed) -- splitting it off
+# would strip each sub-question of the very word that says what it asks for.
+_CLAUSE_SPLIT_RE = re.compile(
+    r"\?|;|,\s+and\b|\s+and\s+(?=(?:in\s+|for\s+|by\s+|at\s+)?"
+    r"(?:what|who|whom|whose|when|where|which|how|why)\b)|\s+and then\b")
+
+DECOMPOSE_ENABLED = os.environ.get("BRAIN_DECOMPOSE", "1") != "0"
+# Counted AFTER stopword stripping, so this is lower than a raw word count
+# suggests: "Who founded Gallaudet University and in what year, and what law
+# made it possible?" is 15 words but only 7 content tokens.
+DECOMPOSE_MIN_TOKENS = 6   # below this a question is single-intent already
+DECOMPOSE_MAX_SUBQ = 3     # cap the extra BM25 passes
+
+
+def classify_intent(question):
+    """Return (intent, wh) for one question.
+
+    intent is 'factual_short' when the question asks for a single concrete fact
+    (a place, date, person, or count) in few words, 'multi' when it has several
+    clauses to answer, else 'analytic'. wh is the matched question word or "".
+    Deterministic and LLM-free; runs on every question. Never raises."""
+    try:
+        q = re.sub(r"\s+", " ", (question or "").strip().lower())
+        m = _WH_RE.search(q)
+        wh = m.group(1) if m else ""
+        n_content = len(query_tokens(q))
+        if len(_split_clauses(q)) > 1 and n_content >= DECOMPOSE_MIN_TOKENS:
+            return "multi", wh
+        if wh in _INTENT_EXPANSIONS and n_content <= FACTUAL_MAX_TOKENS:
+            return "factual_short", wh
+        return "analytic", wh
+    except Exception:
+        return "analytic", ""
+
+
+def intent_boost_terms(qtok, wh):
+    """Answer-type terms for the question word, minus any already in the query.
+    Returns () when the question word has no expansion."""
+    extra = _INTENT_EXPANSIONS.get(wh)
+    if not extra:
+        return ()
+    have = set(qtok)
+    return tuple(t for t in extra if t not in have)
+
+
+def _apply_card_boost(scores, chunks, intent):
+    """Prefer a note's definition card when the question asks for a FACT.
+
+    A card is short by construction, which is what makes it win a short query
+    and lose a long one: BM25 sums over query terms, so a 63-word card matching
+    four of twelve terms is beaten by a 315-word prose chunk matching nine --
+    even though only the card carries the date being asked for. Measured on
+    "which was founded first, Gallaudet or the Maryland School for the Deaf?":
+    both MSD slots went to prose, and 1868 never reached the context.
+
+    Applied only for fact-seeking intents. An analytic question wants the
+    argument, which lives in the prose, so cards must not displace it there."""
+    if intent not in ("factual_short", "multi") or not len(scores):
+        return scores
+    for i, c in enumerate(chunks):
+        if scores[i] > 0 and c.get("card"):
+            scores[i] *= (1.0 + CARD_BOOST)
+    return scores
+
+
+def _apply_intent_boost(scores, bm25, terms, weight=INTENT_BOOST_WEIGHT):
+    """Add a fraction of the answer-type terms' BM25 score to chunks that ALREADY
+    match the question, and to no others.
+
+    The gate is the whole design. Merging these terms into the query bag instead
+    is actively worse than not expanding at all: for "Where is Gallaudet
+    University?" the added {located, city, address, campus} outscore
+    {gallaudet, university} on notes that are wall-to-wall addresses, and the
+    Gallaudet note falls out of the top 6 entirely -- measured, not theorized.
+    Gating on scores[i] > 0 makes the expansion a TIE-BREAKER among chunks that
+    match the entity ("of the Gallaudet chunks, prefer the one stating a
+    location") and leaves it unable to promote a chunk the query never matched."""
+    if not terms or not len(scores):
+        return scores
+    try:
+        boost = bm25.get_scores(list(terms))
+    except Exception:
+        return scores
+    if len(boost) != len(scores):
+        return scores
+    for i in range(len(scores)):
+        if scores[i] > 0:
+            scores[i] += weight * boost[i]
+    return scores
+
+
+def entity_subqueries(qtok, chunks):
+    """One sub-query per NOTE the question names outright, for comparison
+    questions, else [].
+
+    Clause splitting cannot reach these. "Gallaudet University and the Maryland
+    School for the Deaf were both founded in the 1860s -- which came first?" is
+    one clause naming two entities, so it stays a single 12-token bag, and a
+    short definition card can only ever match the few terms it contains while a
+    long prose chunk from either note matches more. Measured: six chunks came
+    back holding 1864 twice and 1868 not at all, so "which came first" was
+    unanswerable from context no matter how good the model is.
+
+    Splitting BY ENTITY instead gives each named note its own focused query,
+    carrying the question's shared predicate terms (founded, first, apart) but
+    only ONE entity's terms, which is what lets each entity's card win its own
+    sub-ranking. Returns [] unless at least two notes are named, since a single
+    named entity is what ordinary retrieval already handles."""
+    try:
+        qset = set(qtok)
+        if len(qset) < 4:
+            return []
+        matched = []
+        seen = set()
+        for c in chunks:
+            title = c.get("title") or ""
+            if title in seen:
+                continue
+            seen.add(title)
+            ttok = _title_tokens(title)
+            # The query must name the title in FULL. A partial match ("school"
+            # against "Maryland School for the Deaf") is the ordinary topical
+            # overlap that normal scoring already handles, and splitting on it
+            # would fragment single-entity questions.
+            if len(ttok) >= 2 and ttok <= qset:
+                matched.append(ttok)
+        if len(matched) < 2:
+            return []
+        matched.sort(key=len, reverse=True)
+        matched = matched[:DECOMPOSE_MAX_SUBQ]
+        # Terms belonging to no named entity are the shared predicate; every
+        # sub-query keeps them so each stays a question, not a bare noun.
+        entity_terms = set().union(*matched)
+        shared = [t for t in qtok if t not in entity_terms]
+        return [sorted(ttok) + shared for ttok in matched]
+    except Exception:
+        return []
+
+
+def _split_clauses(question):
+    """Split a question into candidate sub-question strings on clause
+    boundaries. Returns the pieces that carry at least one content word."""
+    parts = _CLAUSE_SPLIT_RE.split(question or "")
+    out = []
+    for p in parts:
+        if not p:
+            continue
+        p = p.strip(" ,.;:!?-")
+        if p and query_tokens(p):
+            out.append(p)
+    return out
+
+
+def decompose(question):
+    """Token lists for a multi-clause question's sub-questions, else [].
+
+    A multi-clause question scored as ONE bag lets a term from clause B pull
+    decoys that share no clause-A term: in "Who founded Gallaudet University and
+    in what year, and what law made it possible?", `founded` and `law` are
+    scored independently of `gallaudet`, so a note about a center "founded 2020"
+    and a note about the NO FAKES Act both outrank the Gallaudet notes. Scoring
+    each clause separately and fusing the rankings keeps each term next to the
+    entity it belongs to.
+
+    Every sub-query is ANCHORED with the first clause's content terms. Trailing
+    clauses are usually subject-less ("in what year" -> just {year}), and an
+    unanchored one-term query retrieves by that term alone -- which is the exact
+    decoy problem this function exists to solve, reintroduced one level down."""
+    if not DECOMPOSE_ENABLED:
+        return []
+    try:
+        if len(query_tokens(question)) < DECOMPOSE_MIN_TOKENS:
+            return []
+        parts = _split_clauses(question)
+        if len(parts) < 2:
+            return []
+        anchor = query_tokens(parts[0])
+        subqs = [anchor]
+        for p in parts[1:DECOMPOSE_MAX_SUBQ]:
+            toks = query_tokens(p)
+            merged = anchor + [t for t in toks if t not in set(anchor)]
+            # A clause that adds nothing past the anchor is not a sub-question.
+            if len(merged) > len(anchor):
+                subqs.append(merged)
+        return subqs if len(subqs) > 1 else []
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Index loading.
 # ---------------------------------------------------------------------------
 def load_index():
@@ -480,6 +714,15 @@ def load_index():
         sys.exit(1)
 
     meta = _build_meta(data, chunks)
+    # Hybrid retrieval is gated on the dense block EXISTING, not on the flag, so
+    # an index built without --embed silently downgrades a "hybrid on" system to
+    # BM25-only with no signal anywhere. That is how this vault ran for a full
+    # rebuild cycle. Fail loud instead: the flag says hybrid, the data says no.
+    if HYBRID_ENABLED and not meta.get("dense"):
+        print("NOTE: BRAIN_HYBRID is on but this index carries no dense vectors, "
+              "so retrieval is BM25-only.")
+        print("      Rebuild with --embed to enable hybrid RRF:  python3 %s --embed"
+              % os.path.join(BRAIN_ROOT, "build_index.py"))
     return chunks, bm25, meta
 
 
@@ -612,6 +855,63 @@ def _prep_dense(dense, chunks):
 # Folder-name token sets are memoized: the vault has a handful of top-level
 # folders but _apply_section_boost runs per chunk per question on the CPU.
 _FOLDER_TOKENS = {}
+
+# Note-title token sets, memoized for the same reason (a few hundred titles,
+# scored per chunk per question).
+_TITLE_TOKENS = {}
+
+# Multiplier applied at a perfect title match. BM25 has no notion of fields, so
+# a term in a note's TITLE counts exactly as much as one buried in its body --
+# and chunk breadcrumbs inject the title path into every chunk, which makes it
+# worse: sixteen "Summer Camps ... > Gallaudet University Hearing and Speech
+# Center" resource listings all carry "gallaudet university" as body text and,
+# being long, carry it several times over. Measured, they buried the actual
+# Gallaudet note. Title matching is the field weight that separates "the note
+# ABOUT X" from "a note that MENTIONS X".
+TITLE_BOOST = 1.0
+
+
+def _title_tokens(title):
+    """Memoized content-token set for a note title."""
+    toks = _TITLE_TOKENS.get(title)
+    if toks is None:
+        toks = frozenset(t for t in tokenize(title or "")
+                         if t not in QUERY_STOPWORDS)
+        _TITLE_TOKENS[title] = toks
+    return toks
+
+
+def _apply_title_boost(scores, chunks, qtok):
+    """Scale up chunks whose NOTE TITLE the query names.
+
+    The weight is the symmetric overlap between the query's content words and
+    the title's, so it peaks when the question essentially IS the title ("Where
+    is Gallaudet University?" against "Gallaudet University" = 1.0) and fades
+    when either side carries much the other does not. Symmetry matters in both
+    directions: a one-word title must not capture every query containing that
+    word, and a long question must not fully boost a note it only brushes.
+
+    Multiplicative, and applied only where the chunk already scores, so it
+    reorders real matches rather than promoting unmatched ones."""
+    if not len(scores):
+        return scores
+    qset = set(qtok)
+    if not qset:
+        return scores
+    ratios = {}
+    for i, c in enumerate(chunks):
+        if scores[i] <= 0:
+            continue
+        title = c.get("title") or ""
+        ratio = ratios.get(title)
+        if ratio is None:
+            ttok = _title_tokens(title)
+            inter = len(qset & ttok)
+            ratio = 0.0 if not inter else inter / float(len(qset | ttok))
+            ratios[title] = ratio
+        if ratio > 0:
+            scores[i] *= (1.0 + TITLE_BOOST * ratio)
+    return scores
 
 
 def _apply_section_boost(scores, chunks, qtok):
@@ -1774,21 +2074,78 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
                 pass
 
 
+# Appended to the system prompt for the question shapes the base prompts serve
+# badly. The base prompts ask for "about 5 to 8 sentences" unconditionally, so a
+# 3B model answers "Where is Gallaudet University?" with an essay that buries
+# the city in a subordinate clause. These directives are APPENDED, never
+# substituted: the INSUFFICIENT contract, the citation rules, and the
+# no-outside-knowledge rules must survive verbatim or _is_insufficient,
+# faithfulness_flags, and chat_stream_holdback all stop working.
+_INTENT_DIRECTIVES = {
+    "factual_short": (
+        " OVERRIDE the length guidance above for this question: it asks for one "
+        "specific fact. State that fact in your FIRST sentence, directly and "
+        "completely, then add at most two short sentences of supporting context "
+        "from the snippets. Do not open with background. Do not write an essay."
+    ),
+    "multi": (
+        " This question has several parts. Answer EVERY part, in the order "
+        "asked, and say plainly which parts the snippets do not cover rather "
+        "than answering only the part you have the most material for."
+    ),
+}
+
+
+def _shape_for_intent(system_prompt, intent):
+    """Append the intent directive to a base system prompt. Unknown or
+    'analytic' intents get the prompt back unchanged."""
+    return system_prompt + _INTENT_DIRECTIVES.get(intent, "")
+
+
 def _handle_question_impl(model, question, history, bm25, chunks, meta,
                           web_enabled, run, persona, tm, qvec=None,
                           qvec_model=None):
     # --- Retrieval: BM25 scoring -----------------------------------------
     run.running("bm25")
     _t = time.perf_counter()
+    intent, wh = classify_intent(question)
     qtok = query_tokens(question)
+
+    # A question that names two or more notes outright is a comparison and needs
+    # multi handling even when it is a single clause ("Which is older, X or Y?"
+    # has nothing to split on), so entity sub-queries can promote the intent.
+    # Resolved BEFORE the boosts and keep_k, which both read the final intent.
+    ent_subs = entity_subqueries(qtok, chunks)
+    if ent_subs and intent != "multi":
+        intent = "multi"
+
     try:
         scores = bm25.get_scores(qtok)
     except Exception:
         scores = []
     scores = _apply_section_boost(scores, chunks, qtok)
+    scores = _apply_title_boost(scores, chunks, qtok)
+    scores = _apply_intent_boost(scores, bm25, intent_boost_terms(qtok, wh))
+    scores = _apply_card_boost(scores, chunks, intent)
     if persona == "parent":
         scores = _apply_parent_boost(scores, chunks)
+
+    # Per-sub-question BM25 rankings, fused with the whole-question ranking
+    # below so a chunk answering ANY one part well can reach the context window.
+    sub_rankings = []
+    if intent == "multi":
+        for sub in decompose(question) + ent_subs:
+            try:
+                s = bm25.get_scores(sub)
+            except Exception:
+                continue
+            if not len(s):
+                continue
+            sub_rankings.append(
+                [i for i in sorted(range(len(chunks)), key=lambda i: s[i],
+                                   reverse=True) if s[i] > 0][:RRF_POOL])
     tm["bm25"] = time.perf_counter() - _t
+    tm["subq"] = len(sub_rankings)
 
     retrieved = []
     top_score = 0.0
@@ -1799,6 +2156,13 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
             keep_k = TOP_K_DEEP
         elif persona == "parent":
             keep_k = PARENT_TOP_K
+        elif intent == "multi":
+            # Every named entity needs its own facts in context, and at 2 chunks
+            # per source TOP_K_FAST=6 covers only three notes -- with the card
+            # carrying the date competing against its own note's prose for those
+            # two slots. Same size as TOP_K_DEEP, which num_ctx=6144 already
+            # holds for the 7B path.
+            keep_k = MULTI_TOP_K
         else:
             keep_k = TOP_K_FAST
         order = None
@@ -1819,19 +2183,35 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
                 bm25_pool = [i for i in ranked if scores[i] > 0][:RRF_POOL]
                 dense_pool = [i for i in dense_ranked
                               if dscore[i] > float("-inf")][:RRF_POOL]
-                order = _rrf_fuse([bm25_pool, dense_pool])
-                mode = "hybrid"
+                order = _rrf_fuse([bm25_pool, dense_pool] + sub_rankings)
+                mode = "hybrid+subq" if sub_rankings else "hybrid"
         if order is None:
             # BM25 + query-time rerank (un-embedded index, hybrid off, or the
             # embedder was unreachable). Identical to the pre-hybrid behavior.
-            cand_ids = [i for i in ranked if scores[i] > 0][:RERANK_CAND_N]
+            if sub_rankings:
+                # Fuse the whole-question and per-clause rankings FIRST, then
+                # rerank that shortlist, so a chunk that only a sub-question
+                # surfaces is still a rerank candidate.
+                whole_pool = [i for i in ranked if scores[i] > 0][:RRF_POOL]
+                cand_ids = _rrf_fuse([whole_pool] + sub_rankings)[:RERANK_CAND_N]
+                mode = "bm25+subq"
+            else:
+                cand_ids = [i for i in ranked if scores[i] > 0][:RERANK_CAND_N]
             _t = time.perf_counter()
             order = _rerank_by_embedding(question, chunks, cand_ids, qvec=qvec,
                                          qvec_model=qvec_model)
             tm["rerank"] = time.perf_counter() - _t
-        if persona == "parent" and order:
-            order = _diversify_order(order, chunks, keep_k,
-                                     PARENT_MAX_PER_SOURCE)
+        if order and (persona == "parent" or intent == "multi"):
+            # A multi-entity question needs facts from several different notes,
+            # and the boosts that make the FIRST entity rank well let its note
+            # take every slot: "which was founded first, Gallaudet or the
+            # Maryland School for the Deaf?" retrieved six Gallaudet chunks and
+            # zero MSD ones, so half the answer could not be in context at any
+            # generation quality. Same failure the parent rubric hit, same fix.
+            order = _diversify_order(
+                order, chunks, keep_k,
+                PARENT_MAX_PER_SOURCE if persona == "parent"
+                else MULTI_MAX_PER_SOURCE)
         for i in order[:keep_k]:
             retrieved.append(chunks[i])
         if ranked:
@@ -1869,6 +2249,7 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     # answers well -- slower and less grounded.)
     run.running("model")
     system_prompt = PARENT_SYSTEM if persona == "parent" else VAULT_FIRST_SYSTEM
+    system_prompt = _shape_for_intent(system_prompt, intent)
     vault_messages = [{"role": "system", "content": system_prompt}]
     vault_messages.extend(history[-PHASE1_HISTORY_MSGS:] if history else [])
     vault_messages.append(

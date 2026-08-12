@@ -95,6 +95,24 @@ NEGATIONS = frozenset({
     "no", "not", "never", "without", "none", "cannot", "nor", "neither",
 })
 
+# Question words, guarded on the same principle as NEGATIONS and for the same
+# reason: they are STOPWORDS, so they are stripped before the fuzzy match and
+# two questions that differ only in what they ask for score 1.0 against each
+# other. "Where is Gallaudet University?" reduced to {gallaudet, university} and
+# matched a primed entry literally titled "Gallaudet University" at Jaccard
+# 1.000, so a request for a city returned a 250-word institutional essay and
+# never reached retrieval at all. Raising FUZZY_THRESHOLD cannot fix this: the
+# content sets really are identical. The intent has to be compared separately.
+#
+# Grouped by the answer they demand, so genuine paraphrases still collide:
+# "where is X" / "what is the location of X" are the same question, and
+# "what/which" stay together because "what school" and "which school" are too.
+_WH_GROUPS = {
+    "where": "place", "when": "time", "who": "person", "whom": "person",
+    "whose": "person", "why": "reason", "how": "manner",
+    "what": "thing", "which": "thing",
+}
+
 # -- Compound-interest "knowledge bank" parameters ----------------------------
 # V = principal  *  (1 + INTEREST_RATE) ** hits  *  recency decay.
 # The decay clock is measured from an entry's LAST USE, so a reuse both
@@ -143,6 +161,23 @@ def _negations(tokens):
         return {t for t in tokens if t in NEGATIONS}
     except Exception:
         return set()
+
+
+def _wh_intent(tokens):
+    """The answer-type group a question asks for ('place', 'time', 'person',
+    ...), or "" when it uses no question word. Read from the FULL token list,
+    before _match_set strips the question word as filler. Only the FIRST
+    question word counts: it governs the sentence, while a later one usually
+    sits in a subordinate clause ('where is the school that teaches what?').
+    Never raises."""
+    try:
+        for t in tokens:
+            group = _WH_GROUPS.get(t)
+            if group:
+                return group
+        return ""
+    except Exception:
+        return ""
 
 
 def _sha1(text):
@@ -277,6 +312,7 @@ class AnswerCache:
         # entry per query. path -> frozenset(...).
         self._match_cache = {}   # path -> frozenset of content words
         self._neg_cache = {}     # path -> frozenset of negation words
+        self._wh_cache = {}      # path -> answer-type group (see _WH_GROUPS)
         # Inverted index: content word -> set of paths whose entry contains it.
         # A fuzzy query only needs to score entries that share >=1 content word
         # with it (Jaccard >= FUZZY_THRESHOLD forces intersection >= 1), so this
@@ -335,6 +371,7 @@ class AnswerCache:
             match = frozenset(_match_set(toks))
             self._match_cache[path] = match
             self._neg_cache[path] = frozenset(_negations(toks))
+            self._wh_cache[path] = _wh_intent(toks)
             for word in match:
                 self._inverted.setdefault(word, set()).add(path)
         except Exception:
@@ -351,6 +388,7 @@ class AnswerCache:
                     if not bucket:
                         del self._inverted[word]
             self._neg_cache.pop(path, None)
+            self._wh_cache.pop(path, None)
         except Exception:
             return
 
@@ -448,6 +486,7 @@ class AnswerCache:
             if len(q_match) < FUZZY_MIN_TOKENS:
                 return None
             q_neg = _negations(q_toks)
+            q_wh = _wh_intent(q_toks)
             q_size = len(q_match)
 
             # Candidate narrowing: only entries that share at least one content
@@ -491,6 +530,16 @@ class AnswerCache:
                         continue
                     # Opposite intents (differing negations) never match.
                     if self._neg_cache.get(path, frozenset()) != q_neg:
+                        continue
+                    # Different answer-types never match either (see _WH_GROUPS).
+                    # An entry with NO question word is a bare topic label
+                    # ("Gallaudet University"), which answers no specific
+                    # question, so it may only serve a query that also asks
+                    # none. A query with no question word still matches
+                    # anything, since "Gallaudet University" as a QUERY is an
+                    # open request that any stored answer can satisfy.
+                    e_wh = self._wh_cache.get(path, "")
+                    if q_wh and e_wh != q_wh:
                         continue
                     score = _jaccard(q_match, entry_match)
                     if score > best_score:
@@ -731,6 +780,7 @@ class AnswerCache:
         self._norm_index = {}
         self._match_cache = {}
         self._neg_cache = {}
+        self._wh_cache = {}
         self._inverted = {}
         self._dirty = set()
         return removed
