@@ -68,14 +68,23 @@ fi
 echo "==> Ensuring install directories exist (no sudo; snowbeach owns /mnt/nvme) ..."
 mkdir -p "${VAULT_DIR}" "${INDEX_DIR}"
 
-echo "==> Building the BM25 index ..."
+# --embed is REQUIRED here, not optional. brain.py's BRAIN_HYBRID defaults ON,
+# but hybrid RRF silently degrades to BM25-only when the index carries no dense
+# block -- which is exactly what a plain build produces. That is how this vault
+# ran for a full rebuild cycle: hybrid retrieval was enabled and doing nothing.
+# Embedding is graceful (build_index warns and continues if Ollama is down or
+# nomic-embed-text is missing), so passing it unconditionally is safe.
+# It does add a one-time embed pass over every chunk, so the build is slower.
+echo "==> Building the BM25 index (with dense vectors for hybrid retrieval) ..."
 if [ -n "$(ls -A "${VAULT_DIR}" 2>/dev/null || true)" ]; then
-  python3 "${BRAIN_DIR}/build_index.py"
+  echo "    (embedding every chunk with nomic-embed-text; this takes a few"
+  echo "     minutes on the Orin and is not a hang)"
+  python3 "${BRAIN_DIR}/build_index.py" --embed
   echo "Index built at ${INDEX_DIR}/bm25.pkl"
 else
   echo "WARN: ${VAULT_DIR} is empty; the ThesisVault has not been synced yet."
   echo "      Skipping index build. rsync the vault, then run:"
-  echo "        python3 ${BRAIN_DIR}/build_index.py"
+  echo "        python3 ${BRAIN_DIR}/build_index.py --embed"
 fi
 
 echo "==> Installing launcher at ${LAUNCHER} ..."

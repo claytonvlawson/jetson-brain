@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py escalate.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -134,6 +134,15 @@ scp -q \
   "${HERE}/research-agent.timer" \
   "${HERE}/obsidian_rank.py" \
   "${HERE}/export_obsidian_vectors.py" \
+  "${HERE}/escalate.py" \
+  "${HERE}/test_hybrid.py" \
+  "${HERE}/test_is_insufficient.py" \
+  "${HERE}/test_intent.py" \
+  "${HERE}/test_note_card.py" \
+  "${HERE}/test_stream_holdback.py" \
+  "${HERE}/test_obsidian_rank.py" \
+  "${HERE}/test_obsidian_expand.py" \
+  "${HERE}/test_web_semantic.py" \
   "${JETSON}:${REMOTE}/"
 
 # obsidian_vectors.json is a generated artifact (see the step above), not
@@ -147,6 +156,26 @@ fi
 # ---- Make scripts executable and install --------------------------------
 echo "==> Marking scripts executable and running install.sh on the Jetson ..."
 ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '${REMOTE}/jetson-wifi.sh' '${REMOTE}/asl-mac.sh' '${REMOTE}/jetson-menu.sh' '${REMOTE}/advisor-funnel-jetson.sh' '${REMOTE}/brain-web.sh' '${REMOTE}/brain_web.py' && bash '${REMOTE}/install.sh'"
+
+# ---- Restart the long-running services ----------------------------------
+# Deploy overwrites the .py files in place, but a service already running holds
+# the OLD code in memory until it is restarted. advisor_server.py and
+# brain_web.py both import brain.py, so without this they keep serving the
+# pre-deploy retrieval pipeline indefinitely and the deploy looks like a no-op.
+# systemctl needs root here, so this is best-effort: if sudo is not available
+# non-interactively, print the commands rather than failing the deploy.
+echo "==> Restarting services that hold brain.py in memory ..."
+ssh "${JETSON}" 'if sudo -n true 2>/dev/null; then
+  for u in advisor.service brain-web.service; do
+    if systemctl list-unit-files "$u" >/dev/null 2>&1 && systemctl is-active --quiet "$u"; then
+      sudo systemctl restart "$u" && echo "    restarted $u"
+    fi
+  done
+else
+  echo "    SKIPPED: passwordless sudo unavailable on the Jetson."
+  echo "    Services are still running PRE-DEPLOY code. Run manually:"
+  echo "      sudo systemctl restart advisor.service brain-web.service"
+fi'
 
 # ---- Done ---------------------------------------------------------------
 cat <<EOF

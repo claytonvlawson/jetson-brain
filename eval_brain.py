@@ -448,8 +448,9 @@ def report_gaps(results, the_brain):
 
 
 def load_gold(path):
-    """Read gold_questions.jsonl into a list of dicts. Skips blank/comment lines
-    and malformed rows (with a stderr note). Returns []. Never raises."""
+    """Read any gold .jsonl (gold_questions, factual_gold, multihop_gold, ...)
+    into a list of dicts. Skips blank/comment lines and malformed rows (with a
+    stderr note). Returns [] if nothing loads. Never raises."""
     rows = []
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -758,6 +759,28 @@ def main():
                "judge (--judge-model %s)." % (ISO_CALLS["failed"], total_iso, args.model))
         print(msg, file=sys.stderr)
         return 4
+
+    # The guard above only catches a judge that THROWS. A judge that returns
+    # well-formed but useless verdicts slips straight through it: the
+    # qwen2.5:7b baseline run recorded errors: [], judge_failures: 0, and a
+    # visibly correct answer_preview, yet scored a plausible-looking 0/28.
+    # A real system does not score zero on every question while still producing
+    # non-empty answers from retrieved sources -- that shape is a dead judge,
+    # so refuse to report it as a result.
+    # A third rather than a majority: on the run this guard is built from, only
+    # 15 of 28 questions had both a preview and sources, which clears a majority
+    # by one. Requiring a majority would make detection turn on noise.
+    if results and all(r["score"] == 0 for r in results):
+        answered = [r for r in results
+                    if (r.get("answer_preview") or "").strip() and r.get("n_sources")]
+        if len(answered) >= max(1, len(results) / 3):
+            print("JUDGE UNRELIABLE: every one of %d questions scored 0, but %d of "
+                  "them produced a non-empty answer from retrieved sources.\n"
+                  "  A uniform zero with real answers is a judge outage, not a "
+                  "system result. Re-run with --judge-model %s."
+                  % (len(results), len(answered), args.model), file=sys.stderr)
+            return 4
+
     return 5 if failed else 0
 
 

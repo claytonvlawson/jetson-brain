@@ -105,8 +105,9 @@ def _chunk_file(path, rel_source, meta_mode="none"):
     the frontmatter metadata injection for the index's meta_mode (inject
     before the tokenizable filter, mirroring build()'s order), so incremental
     updates and full builds produce identical chunks and the unchanged-note
-    comparison never churns. Returns (chunk_texts, frontmatter, body, title)
-    or None when the file is unreadable."""
+    comparison never churns. Returns
+    (chunk_texts, frontmatter, body, title, has_card) or None when the file is
+    unreadable."""
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
             raw = fh.read()
