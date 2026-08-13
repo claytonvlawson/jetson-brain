@@ -217,6 +217,38 @@ RRF_K = 60          # standard RRF damping constant; larger flattens rank weight
 RRF_POOL = 60       # fuse this many top docs from each ranker
 DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
 
+# ---- HyDE: retrieve with a hypothetical ANSWER, not the question -----------
+# The gold questions are conversational and share almost no vocabulary with the
+# notes that answer them: "a college only for deaf people" shares 4 of 20
+# content tokens with the Gallaudet note, "the state school up in Frederick"
+# reaches for an org note written in institutional prose. Both BM25 and a dense
+# embedding of the QUESTION are searching from question-space; the documents
+# live in answer-space. HyDE closes that gap by having the 3B write a short
+# hypothetical answer and embedding THAT instead.
+#
+# It is fused as its own RRF ranker alongside BM25 and the real question's
+# dense ranking, so it can only ADD evidence -- a wrong hypothesis costs a
+# little rank dilution, never the literal question's ranking. And it never
+# touches BM25, which is the crucial difference from expand_query_tokens: that
+# merged answer-TYPE terms into the LEXICAL bag, where address-dense DMV notes
+# outscored the real target and pushed it out of the window. It was measured
+# worse and correctly removed. This is not that.
+#
+# Default OFF: it costs one extra 3B generation per question (the dominant
+# latency on an 8GB Orin), so it must earn its place on measurement before it
+# becomes the default.
+HYDE_ENABLED = os.environ.get("BRAIN_HYDE", "0") not in ("0", "false", "False", "no")
+HYDE_NUM_PREDICT = _env_int("BRAIN_HYDE_NUM_PREDICT", 96, lo=16, hi=512)
+HYDE_TIMEOUT = 30
+HYDE_SYSTEM = (
+    "Write a short, plausible encyclopedia-style passage that would ANSWER the "
+    "user's question. Two or three sentences. State it as fact, name the "
+    "specific people, places, organizations, terms and years such a passage "
+    "would contain, and do not hedge, ask questions, or mention that you are "
+    "uncertain. This text is used only to search a document collection; it is "
+    "never shown to anyone."
+)
+
 # ---- ANN (approximate nearest neighbor) dense search + non-indexed post-filter
 # The default dense search is an EXACT full mat@q cosine: precise and, at a few
 # thousand L2-normalized rows, already ~1 ms. ANN is an OPTIONAL SCALING path for
@@ -1391,6 +1423,61 @@ def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
         return None
 
 
+def hyde_hypothesis(question, model=None, tm=None):
+    """Ask the fast model for a short hypothetical answer to `question`.
+
+    Returns the text, or None on any failure. Deliberately total: HyDE is an
+    optional extra ranker, so a dead or slow generation must degrade retrieval
+    to exactly the non-HyDE path rather than take the turn down with it."""
+    try:
+        opts = dict(GEN_OPTIONS)
+        opts["num_predict"] = HYDE_NUM_PREDICT
+        # Greedy. A hypothesis is a retrieval probe, not prose for a human, and
+        # sampling it would make the whole retrieval ranking nondeterministic
+        # even with BRAIN_SEED set on the answer call.
+        opts["temperature"] = 0.0
+        text = chat_once(
+            model or FAST_MODEL,
+            [{"role": "system", "content": HYDE_SYSTEM},
+             {"role": "user", "content": question}],
+            options=opts,
+        )
+        text = (text or "").strip()
+        if not text:
+            return None
+        # A refusal or a clarifying question is worse than nothing: it would
+        # embed near notes about not knowing things. Cheap shape check.
+        if _is_insufficient(text):
+            return None
+        return text
+    except Exception:
+        return None
+
+
+def _hyde_scores(question, chunks, meta, tm=None, model=None):
+    """Dense scores for a HYPOTHETICAL ANSWER to the question, or None.
+
+    Reuses _dense_scores so the hypothesis goes through the identical embed
+    path, index prefix handling, ANN branch and source predicate as the real
+    query. Adding a second scoring implementation for this is how the two
+    quietly diverge."""
+    _t = time.perf_counter()
+    try:
+        hyp = hyde_hypothesis(question, model=model, tm=tm)
+        if not hyp:
+            return None
+        # Anchor the hypothesis with the question. An unanchored hypothesis
+        # that guesses the wrong entity retrieves confidently for that wrong
+        # entity; keeping the question in the embedded text bounds how far the
+        # probe can wander from what was actually asked.
+        return _dense_scores(question + "\n" + hyp, chunks, meta)
+    except Exception:
+        return None
+    finally:
+        if tm is not None:
+            tm["hyde"] = time.perf_counter() - _t
+
+
 def _rrf_fuse(rankings, k=RRF_K, pool=RRF_POOL):
     """Reciprocal Rank Fusion of several ranked chunk-index lists.
 
@@ -2475,8 +2562,8 @@ def _format_timing(tm):
     for key in ("mode", "persona"):
         if tm.get(key):
             parts.append("%s=%s" % (key, tm[key]))
-    for key in ("bm25", "dense", "rerank", "expand", "obsidian", "ttft", "phase1",
-                "skills", "route", "web", "total"):
+    for key in ("bm25", "dense", "hyde", "rerank", "expand", "obsidian", "ttft",
+                "phase1", "skills", "route", "web", "total"):
         if key in tm:
             parts.append("%s=%.3f" % (key, tm[key]))
     # ctx_dropped is absent on a turn that fit, so it appears in the timing line
@@ -2689,9 +2776,24 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                 bm25_pool = [i for i in ranked if scores[i] > 0][:RRF_POOL]
                 dense_pool = [i for i in dense_ranked
                               if dscore[i] > float("-inf")][:RRF_POOL]
-                order = _rrf_fuse([bm25_pool, dense_pool] + sub_rankings)
+                pools = [bm25_pool, dense_pool]
+                # HyDE contributes a THIRD ranker, from a hypothetical answer
+                # rather than the question, for the vocabulary gap neither of
+                # the other two can cross. Additive by construction: a bad
+                # hypothesis dilutes rank slightly, it cannot overwrite the
+                # literal question's ranking.
+                suffix = ""
+                if HYDE_ENABLED:
+                    hscore = _hyde_scores(question, chunks, meta, tm)
+                    if hscore is not None:
+                        hyde_ranked = sorted(range(len(chunks)),
+                                             key=lambda i: hscore[i], reverse=True)
+                        pools.append([i for i in hyde_ranked
+                                      if hscore[i] > float("-inf")][:RRF_POOL])
+                        suffix = "+hyde"
+                order = _rrf_fuse(pools + sub_rankings)
                 order_full = order
-                mode = "hybrid+subq" if sub_rankings else "hybrid"
+                mode = ("hybrid+subq" if sub_rankings else "hybrid") + suffix
         if order is None:
             # BM25 + query-time rerank (un-embedded index, hybrid off, or the
             # embedder was unreachable). Identical to the pre-hybrid behavior.

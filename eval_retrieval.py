@@ -151,7 +151,14 @@ def env_fingerprint(meta, chunks):
         "dense_dim": dense.get("dim"),
         "dense_rows": dense.get("n") or len(dense.get("rows_idx") or []),
         "BRAIN_HYBRID": os.environ.get("BRAIN_HYBRID", "1"),
-        "BRAIN_DECOMPOSE": os.environ.get("BRAIN_DECOMPOSE", "1"),
+        # Default "0" tracks brain.py: decomposition measured WORSE
+        # (in_context 31/40 vs 29/40) and was flipped off. A stale default here
+        # would mislabel every saved artifact's arm.
+        "BRAIN_DECOMPOSE": os.environ.get("BRAIN_DECOMPOSE", "0"),
+        # HyDE IS reachable from retrieve_context, unlike the obsidian flags,
+        # so this arm genuinely moves the numbers below.
+        "BRAIN_HYDE": os.environ.get("BRAIN_HYDE", "0"),
+        "BRAIN_TOP_K_FAST": os.environ.get("BRAIN_TOP_K_FAST", "8"),
         "BRAIN_ANN": os.environ.get("BRAIN_ANN", "0"),
         "BRAIN_OBSIDIAN_RANK": os.environ.get("BRAIN_OBSIDIAN_RANK", "0"),
         # Default "0" matches brain.py:249. Recorded for ATTRIBUTION only:
@@ -193,9 +200,10 @@ def main():
           % (fp["index"], fp["chunks"], fp["tokenizer_version"],
              fp["dense_model"], fp["dense_dim"], fp["dense_rows"],
              fp["embed_prefix_version"]))
-    print("arms: HYBRID=%s DECOMPOSE=%s ANN=%s OBSIDIAN_RANK=%s "
-          "OBSIDIAN_BLOCKS=%s"
-          % (fp["BRAIN_HYBRID"], fp["BRAIN_DECOMPOSE"], fp["BRAIN_ANN"],
+    print("arms: HYBRID=%s DECOMPOSE=%s HYDE=%s TOP_K_FAST=%s ANN=%s "
+          "OBSIDIAN_RANK=%s OBSIDIAN_BLOCKS=%s"
+          % (fp["BRAIN_HYBRID"], fp["BRAIN_DECOMPOSE"], fp["BRAIN_HYDE"],
+             fp["BRAIN_TOP_K_FAST"], fp["BRAIN_ANN"],
              fp["BRAIN_OBSIDIAN_RANK"], fp["BRAIN_OBSIDIAN_BLOCKS"]))
     if skipped:
         print("skipped %d unlabeled: %s" % (len(skipped), ", ".join(skipped[:6])
