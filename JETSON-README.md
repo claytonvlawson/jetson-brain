@@ -129,6 +129,26 @@ ollama pull <model>        # download a new one (needs internet)
 
 ---
 
+## Capability 2b: `brain` inside Obsidian (Ollama shim)
+
+`brain_ollama_shim.py` pretends to be an Ollama server on port 11435 and answers
+every request with the full vault-grounded RAG pipeline, so the Smart Chat
+plugin in Obsidian on the Mac chats with the Jetson brain unpatched.
+
+```
+sudo cp /mnt/nvme/brain/brain-ollama-shim.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now brain-ollama-shim.service
+systemctl status brain-ollama-shim.service
+```
+
+In Obsidian: Settings -> Smart Chat -> Model Platform "Ollama (Local)" ->
+Ollama host `http://100.x.x.x:11435` -> Model `jetson-brain` (fast) or
+`jetson-brain-deep` (7B). Port 11435 only; 11434 belongs to the real Ollama.
+Full click path and every `SHIM_*` variable: `README.md`.
+
+---
+
 ## Capability 3: NCDD NBA draft lab
 
 A separate RAG plus multi-agent draft war-room in `~/ncdd-rag`.
@@ -204,6 +224,9 @@ tegrastats               # one line per second; Ctrl-C to stop
   brain.py            the RAG chat agent (launched as: brain)
   build_index.py      builds the BM25 index (v2: wikilinks + urls)
   answer_cache.py     the answer cache
+  brain_skills.py     optional skill loop for INSUFFICIENT questions (BRAIN_SKILLS=1)
+  brain_ollama_shim.py  fake Ollama API on :11435 for Obsidian Smart Chat
+  obsidian_rank.py    Smart Connections vector signal (BRAIN_OBSIDIAN_RANK=1)
   jetson-menu.sh      this login menu
   jetson-online.sh    route + DNS restore / connectivity test
   README.md           this guide

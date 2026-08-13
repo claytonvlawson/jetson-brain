@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py escalate.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py brain_skills.py brain_ollama_shim.py brain-ollama-shim.service escalate.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py test_obsidian_blocks.py test_brain_skills.py test_ollama_shim.py; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -136,6 +136,9 @@ scp -q \
   "${HERE}/research-agent.timer" \
   "${HERE}/obsidian_rank.py" \
   "${HERE}/export_obsidian_vectors.py" \
+  "${HERE}/brain_skills.py" \
+  "${HERE}/brain_ollama_shim.py" \
+  "${HERE}/brain-ollama-shim.service" \
   "${HERE}/escalate.py" \
   "${HERE}/test_hybrid.py" \
   "${HERE}/test_is_insufficient.py" \
@@ -145,6 +148,9 @@ scp -q \
   "${HERE}/test_obsidian_rank.py" \
   "${HERE}/test_obsidian_expand.py" \
   "${HERE}/test_web_semantic.py" \
+  "${HERE}/test_obsidian_blocks.py" \
+  "${HERE}/test_brain_skills.py" \
+  "${HERE}/test_ollama_shim.py" \
   "${JETSON}:${REMOTE}/"
 
 # obsidian_vectors.json is a generated artifact (see the step above), not
@@ -164,11 +170,14 @@ ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '$
 # the OLD code in memory until it is restarted. advisor_server.py and
 # brain_web.py both import brain.py, so without this they keep serving the
 # pre-deploy retrieval pipeline indefinitely and the deploy looks like a no-op.
+# brain-ollama-shim.service is in the same boat (it imports brain.py to answer
+# Obsidian Smart Chat), and like the other two it is only restarted when it is
+# already installed and running, so a Jetson that never enabled it is untouched.
 # systemctl needs root here, so this is best-effort: if sudo is not available
 # non-interactively, print the commands rather than failing the deploy.
 echo "==> Restarting services that hold brain.py in memory ..."
 ssh "${JETSON}" 'if sudo -n true 2>/dev/null; then
-  for u in advisor.service brain-web.service; do
+  for u in advisor.service brain-web.service brain-ollama-shim.service; do
     if systemctl list-unit-files "$u" >/dev/null 2>&1 && systemctl is-active --quiet "$u"; then
       sudo systemctl restart "$u" && echo "    restarted $u"
     fi
@@ -176,7 +185,7 @@ ssh "${JETSON}" 'if sudo -n true 2>/dev/null; then
 else
   echo "    SKIPPED: passwordless sudo unavailable on the Jetson."
   echo "    Services are still running PRE-DEPLOY code. Run manually:"
-  echo "      sudo systemctl restart advisor.service brain-web.service"
+  echo "      sudo systemctl restart advisor.service brain-web.service brain-ollama-shim.service"
 fi'
 
 # ---- Done ---------------------------------------------------------------
@@ -209,6 +218,17 @@ Next steps:
      Installs a boot service (brain_web.py on 127.0.0.1:8899) and exposes it
      tailnet-only over HTTPS via 'tailscale serve'. Prints the https URL to open.
      Status/URL: bash ${REMOTE}/brain-web.sh status
+
+  5. Obsidian Smart Chat against the brain (Ollama-API shim, one time):
+       ssh ${JETSON}
+       sudo cp ${REMOTE}/brain-ollama-shim.service /etc/systemd/system/
+       sudo systemctl daemon-reload
+       sudo systemctl enable --now brain-ollama-shim.service
+     Serves a fake Ollama API on the tailnet IP, port 11435 (never 11434, which
+     the real Ollama owns). In Obsidian: Settings -> Smart Chat -> model platform
+     "Ollama (Local)" -> Ollama host = http://<tailscale-ip>:11435 -> model
+     "jetson-brain". See README.md for the full click path.
+     Status: systemctl status brain-ollama-shim.service
 
 DEPLOY OK: ${MD_COUNT} md files, code + install pushed to ${JETSON}:${REMOTE}
 EOF

@@ -234,6 +234,34 @@ OBSIDIAN_RANK_ENABLED = os.environ.get("BRAIN_OBSIDIAN_RANK", "0") not in (
 OBSIDIAN_TOP_K_PER_SEED = max(1, int(os.environ.get("BRAIN_OBSIDIAN_TOP_K", "5") or 5))
 OBSIDIAN_MAX_EXPAND = max(1, int(os.environ.get("BRAIN_OBSIDIAN_MAX_EXPAND", "3") or 3))
 
+# Paragraph-level refinement of the SAME signal. The plugin also embeds every
+# block (paragraph run under a heading): 5,024 of them in the live vault against
+# 306 note vectors. With this off, expand_with_obsidian_signal takes an expanded
+# note's FIRST chunk ("cid = ids[0]") because it has no per-chunk score to pick
+# by; with it on, the note's blocks are ranked against the top retrieved note's
+# vector and the winning block is mapped back onto a chunk by heading breadcrumb
+# (obsidian_rank.best_chunk_for_note). MEASURED on the real index: the block
+# choice differs from ids[0] on 171 of 273 multi-chunk notes, so this is a real
+# change in what reaches the context window and stays OFF until an A/B pass
+# says otherwise -- same discipline as OBSIDIAN_RANK_ENABLED itself. It also
+# costs deploy weight: the vector export grows from 1.3MB to 23MB, which is why
+# export_obsidian_vectors.py gates the blocks separately (--blocks).
+OBSIDIAN_BLOCKS_ENABLED = os.environ.get("BRAIN_OBSIDIAN_BLOCKS", "0") not in (
+    "0", "false", "False", "no")
+OBSIDIAN_BLOCK_CANDIDATES = max(1, int(
+    os.environ.get("BRAIN_OBSIDIAN_BLOCK_CANDIDATES", "5") or 5))
+
+# Skill loop (brain_skills.py): a bounded single-line-protocol tool loop that
+# runs ONLY when the vault-first pass emitted INSUFFICIENT, before the phase-2
+# web routing. Default OFF, and the flag is read here as well as inside
+# brain_skills so that when it is off brain.py never even imports the module -
+# off must cost nothing and must behave exactly like the pre-skills pipeline.
+# All the loop's other knobs (BRAIN_SKILLS_MAX_STEPS, BRAIN_SKILLS_DEADLINE,
+# BRAIN_SKILLS_NOTE_CHARS, BRAIN_SKILLS_KEEP_K, BRAIN_SKILLS_VERBOSE) live in
+# brain_skills.py, which is their single source of truth.
+SKILLS_ENABLED = os.environ.get("BRAIN_SKILLS", "0") not in (
+    "0", "false", "False", "no")
+
 # Self-updating knowledge base: after a web fetch is persisted into the vault
 # (_WebCache notes via web_cache.py), spawn update_index.py so the new pages
 # are folded into bm25.pkl within seconds, and hot-reload the index when its
@@ -1324,13 +1352,22 @@ def list_models():
     return names
 
 
-def chat_once(model, messages):
+def chat_once(model, messages, options=None):
     """Non-streaming chat. Returns the full text, or an error string prefixed
-    with '[error]' so callers can detect failure without a crash."""
+    with '[error]' so callers can detect failure without a crash.
+
+    `options` overrides GEN_OPTIONS for one call and defaults to None, so every
+    pre-existing call site keeps the exact same request body. It exists for the
+    skill loop's selection call, which wants temperature 0 and a tiny
+    num_predict (brain_skills.SELECT_GEN_OPTIONS) while the answer calls keep
+    the 0.2 default. (Rejected: swapping the GEN_OPTIONS global around the call
+    - the UI animator runs on its own thread, so a mutated global is a race.)
+    """
+    _opts = options if options is not None else GEN_OPTIONS
     try:
         import ollama
         _ka = _keep_alive(model)
-        resp = ollama.chat(model=model, messages=messages, stream=False, options=GEN_OPTIONS, keep_alive=_ka)
+        resp = ollama.chat(model=model, messages=messages, stream=False, options=_opts, keep_alive=_ka)
         _capture_chat_stats(resp)
         msg = resp.get("message") if isinstance(resp, dict) else getattr(resp, "message", None)
         if isinstance(msg, dict):
@@ -1346,7 +1383,7 @@ def chat_once(model, messages):
         import requests
         resp = requests.post(
             OLLAMA_HOST + "/api/chat",
-            json={"model": model, "messages": messages, "stream": False, "options": GEN_OPTIONS, "keep_alive": _keep_alive(model)},
+            json={"model": model, "messages": messages, "stream": False, "options": _opts, "keep_alive": _keep_alive(model)},
             timeout=120,
         )
         resp.raise_for_status()
@@ -2079,6 +2116,26 @@ def expand_with_obsidian_signal(retrieved, context_chunks, meta):
         expanded = obsidian_rank.expand_from_seeds(
             vectors, seed_paths, top_k_per_seed=OBSIDIAN_TOP_K_PER_SEED,
             max_results=OBSIDIAN_MAX_EXPAND)
+
+        # Block-level chunk pick (BRAIN_OBSIDIAN_BLOCKS). The query-side signal
+        # is the TOP retrieved note's own vector, not a live query embedding:
+        # bge-micro-v2 inference on the Jetson was already ruled out, and the
+        # best BM25/dense hit is the closest in-space proxy for "what this
+        # question is about" that costs nothing. Falls back to the next seed
+        # when the top one has no plugin vector. blocks_by_note() is built once
+        # per turn, not per note (it is a full rescan of ~5k blocks otherwise).
+        blocks_index = None
+        signal_vec = None
+        if OBSIDIAN_BLOCKS_ENABLED:
+            block_vectors = obsidian_rank.load_block_vectors_from_export()
+            if block_vectors:
+                for seed in seed_paths:
+                    signal_vec = vectors.get(seed)
+                    if signal_vec:
+                        break
+                if signal_vec:
+                    blocks_index = obsidian_rank.blocks_by_note(block_vectors)
+
         for path, _score in expanded:
             if path in already_sources:
                 continue
@@ -2087,6 +2144,16 @@ def expand_with_obsidian_signal(retrieved, context_chunks, meta):
                 continue
             cid = ids[0]  # note's first/primary chunk -- no BM25 score here to
                           # pick a better one by, unlike expand_with_links.
+            if blocks_index:
+                # best_chunk_for_note returns None when no block maps onto a
+                # chunk, which deliberately leaves ids[0] in charge.
+                chunk_texts = [(i, (by_id.get(i) or {}).get("text") or "")
+                               for i in ids]
+                better = obsidian_rank.best_chunk_for_note(
+                    blocks_index, path, signal_vec, chunk_texts,
+                    max_blocks=OBSIDIAN_BLOCK_CANDIDATES)
+                if better is not None:
+                    cid = better
             if cid in already_present:
                 continue
             chunk = by_id.get(cid)
@@ -2169,6 +2236,92 @@ def _answer_from_excerpts(model, question, excerpts, history, run):
     return _finish(run, history, question, answer, [u for u, _ in excerpts])
 
 
+def _run_skill_loop(model, question, bm25, chunks, meta, web_enabled, persona,
+                    intent="analytic", history=None):
+    """One bounded skill-loop attempt at an INSUFFICIENT question.
+
+    Returns a brain_skills.SkillResult, or None when the loop is unavailable or
+    blew up. Everything here is deliberately defensive: the skill loop is an
+    ADDITION to a pipeline that already answers, so any failure has to leave the
+    existing phase-2 web path untouched rather than take the turn down with it.
+    The import is lazy and inside the try for the same reason
+    expand_with_obsidian_signal imports obsidian_rank that way: a missing or
+    broken module must degrade at question time, never at startup.
+
+    Prompts are passed VERBATIM (vault_system/web_system/doc_system) together
+    with _is_insufficient, so the grounding contract the loop's sub-answers are
+    judged by is the same text this file's own phase-1 call uses, per-intent
+    directive included (_shape_for_intent APPENDS, so the INSUFFICIENT sentinel
+    and the citation rules survive untouched). Substituting a paraphrase there
+    would silently detach _is_insufficient from what the model was told to say.
+
+    `history` is only ever rendered into a short capped blob for the loop's
+    SELECTION call, so a follow-up question has an antecedent to route on. It
+    never becomes chat turns, which on a 6144-token window is how a system
+    prompt gets truncated away.
+    """
+    try:
+        import brain_skills
+    except Exception:
+        return None
+    try:
+        def _retrieve(query, keep_k):
+            # Wider than the phase-1 window on purpose: the loop only runs
+            # because keep_k chunks were not enough. order_full is the
+            # PRE-diversify ranking (retrieve_context keeps it exactly so a
+            # deeper slice is possible), and qvec is NOT reused because the
+            # skill rewrote the query - a stale embedding would score the wrong
+            # question.
+            r = retrieve_context(query, bm25, chunks, meta, model=model,
+                                 persona=persona, tm={})
+            order = r.get("order_full") or r.get("order") or []
+            return [chunks[i] for i in order[:keep_k]]
+
+        def _chat_select(m, messages):
+            opts = dict(GEN_OPTIONS)
+            opts.update(brain_skills.SELECT_GEN_OPTIONS)
+            return chat_once(m, messages, options=opts)
+
+        # Last exchange only, ~200 chars a side. One turn is what a pronoun
+        # actually needs, and the cap keeps this near 100 tokens so the
+        # selection prompt stays the tiny thing brain_skills' header argues for.
+        _prev = []
+        for _role in ("user", "assistant"):
+            for _msg in reversed(history or []):
+                if _msg.get("role") == _role:
+                    _prev.append(_role + ": " + (_msg.get("content") or "")[:200])
+                    break
+        prev_turn = "\n".join(_prev)
+
+        ctx = brain_skills.SkillContext(
+            model=model,
+            chat=chat_once,
+            chat_select=_chat_select,
+            retrieve=_retrieve,
+            gather_web=gather_web_context,
+            fetch_page=fetch_page,
+            meta=meta,
+            web_enabled=web_enabled,
+            vault_system=_shape_for_intent(
+                PARENT_SYSTEM if persona == "parent" else VAULT_FIRST_SYSTEM,
+                intent),
+            web_system=WEB_SYSTEM,
+            doc_system=DOC_SYSTEM,
+            # reason_system is deliberately NOT injected: brain.py's nearest
+            # prompt (NO_WEB_SYSTEM) tells the model to answer from the vault
+            # snippets, which is the opposite of what the reason skill does
+            # (no sources at all). brain_skills.DEFAULT_REASON_SYSTEM already
+            # says exactly that and forbids inventing a citation.
+            is_insufficient=_is_insufficient,
+            format_vault_context=format_vault_context,
+            vault_sources=vault_sources,
+            prev_turn=prev_turn,
+        )
+        return brain_skills.answer_with_skills(ctx, question)
+    except Exception:
+        return None
+
+
 def _format_timing(tm):
     """One machine-parseable stderr line from a turn's timing dict."""
     parts = ["[timing]"]
@@ -2176,7 +2329,7 @@ def _format_timing(tm):
         if tm.get(key):
             parts.append("%s=%s" % (key, tm[key]))
     for key in ("bm25", "dense", "rerank", "expand", "obsidian", "ttft", "phase1",
-                "route", "web", "total"):
+                "skills", "route", "web", "total"):
         if key in tm:
             parts.append("%s=%.3f" % (key, tm[key]))
     for key in ("prompt_eval_count", "eval_count"):
@@ -2526,6 +2679,32 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
             sink(first)
         return _finish(run, history, question, first,
                        vault_sources(context_chunks))
+
+    # === SKILL LOOP: bounded tool selection before the fixed web route =====
+    # Only reached because phase 1 said INSUFFICIENT. The existing phase-2 path
+    # is a ONE-shot decision (FETCH or SEARCH, then answer); the skill loop can
+    # instead re-search the vault with a rewritten query, open a named note, or
+    # take two steps. Same single-line prefix protocol as ROUTE_SYSTEM, same
+    # permissive fallback, because a 3B model cannot emit JSON tool calls.
+    # Placed BEFORE the web-off return so it also helps offline turns (its
+    # menu drops the web skills when web is off). Default OFF; when off nothing
+    # here executes and the turn is byte-identical to the pre-skills pipeline.
+    if SKILLS_ENABLED:
+        run.running("skills")
+        _t = time.perf_counter()
+        _skill = _run_skill_loop(model, question, bm25, chunks, meta,
+                                 web_enabled, persona, intent, history)
+        tm["skills"] = time.perf_counter() - _t
+        if _skill is not None and _skill.ok:
+            run.done("model", "vault insufficient · answered by skill loop")
+            run.done("skills", "%s · %d step(s)" % (_skill.skill, _skill.steps))
+            run.skip("web", "skill loop answered")
+            sink = run.begin_answer()
+            sink(_skill.answer)
+            return _finish(run, history, question, _skill.answer,
+                           _skill.sources)
+        run.skip("skills", _skill.reason if _skill is not None
+                 else "skill loop unavailable")
 
     # Vault could not answer. With web off, answer best-effort without it.
     if not web_enabled:

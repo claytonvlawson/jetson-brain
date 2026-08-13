@@ -154,6 +154,12 @@ def env_fingerprint(meta, chunks):
         "BRAIN_DECOMPOSE": os.environ.get("BRAIN_DECOMPOSE", "1"),
         "BRAIN_ANN": os.environ.get("BRAIN_ANN", "0"),
         "BRAIN_OBSIDIAN_RANK": os.environ.get("BRAIN_OBSIDIAN_RANK", "0"),
+        # Default "0" matches brain.py:249. Recorded for ATTRIBUTION only:
+        # neither obsidian flag is reachable from retrieve_context (the
+        # expansion runs in _handle_question_impl), so a blocks A/B cannot move
+        # a number this harness reports - but two runs must never emit
+        # byte-identical headers under different settings.
+        "BRAIN_OBSIDIAN_BLOCKS": os.environ.get("BRAIN_OBSIDIAN_BLOCKS", "0"),
         "BRAIN_AUTOLEARN": os.environ.get("BRAIN_AUTOLEARN", "1"),
     }
 
@@ -187,9 +193,10 @@ def main():
           % (fp["index"], fp["chunks"], fp["tokenizer_version"],
              fp["dense_model"], fp["dense_dim"], fp["dense_rows"],
              fp["embed_prefix_version"]))
-    print("arms: HYBRID=%s DECOMPOSE=%s ANN=%s OBSIDIAN_RANK=%s"
+    print("arms: HYBRID=%s DECOMPOSE=%s ANN=%s OBSIDIAN_RANK=%s "
+          "OBSIDIAN_BLOCKS=%s"
           % (fp["BRAIN_HYBRID"], fp["BRAIN_DECOMPOSE"], fp["BRAIN_ANN"],
-             fp["BRAIN_OBSIDIAN_RANK"]))
+             fp["BRAIN_OBSIDIAN_RANK"], fp["BRAIN_OBSIDIAN_BLOCKS"]))
     if skipped:
         print("skipped %d unlabeled: %s" % (len(skipped), ", ".join(skipped[:6])
                                             + (" ..." if len(skipped) > 6 else "")))
