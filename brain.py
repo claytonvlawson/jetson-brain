@@ -234,10 +234,36 @@ DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
 # outscored the real target and pushed it out of the window. It was measured
 # worse and correctly removed. This is not that.
 #
-# Default OFF: it costs one extra 3B generation per question (the dominant
-# latency on an 8GB Orin), so it must earn its place on measurement before it
-# becomes the default.
-HYDE_ENABLED = os.environ.get("BRAIN_HYDE", "0") not in ("0", "false", "False", "no")
+# Default ON: it earned it. Measured on all 40 retrieval labels, index-mac
+# 1545 chunks, the only variable being this flag:
+#
+#            in_context   MRR      r@5  r@20  found
+#   off        33/40      0.6437    31    38   39/40
+#   on         36/40      0.6471    35    39   40/40
+#
+# Three questions entered the window (asl_full_language_2, bilingual_bimodal_2,
+# gallaudet_2) and NONE left it. The mechanism matches the claim rather than
+# just the number moving: gallaudet_1 ("a school in Washington, D.C. where
+# every class is taught in sign language" -- never names Gallaudet) went from
+# absent from the fused ranking entirely to rank 23, and interpreting_access_2
+# from 36 to 12. Those are exactly the vocabulary-gap cases BM25 and a dense
+# embedding of the QUESTION both structurally cannot reach.
+#
+# Three questions slipped -- critical_period_2 1->6, maryland_school_deaf_1
+# 1->4, deaf_identity_audism_1 3->4 -- all still inside the window of 8, which
+# is the whole of why r@1 dips 22->21 while every other metric rises. A third
+# ranker dilutes rank slightly by construction; that is the price of the trade.
+#
+# Replicated byte-identical across two runs (0 rank differences on 40
+# questions), which is the empirical check on the greedy-decoding claim below:
+# if the hypothesis were sampled, this A/B could move for reasons unrelated to
+# the change under test.
+#
+# The cost is real and is NOT visible in these numbers: 3.5s per question
+# versus 0.07s, ~48x, entirely the extra 3B generation, measured on Metal. The
+# 8GB Orin will be worse. Set BRAIN_HYDE=0 to buy that latency back at the cost
+# of three questions.
+HYDE_ENABLED = os.environ.get("BRAIN_HYDE", "1") not in ("0", "false", "False", "no")
 HYDE_NUM_PREDICT = _env_int("BRAIN_HYDE_NUM_PREDICT", 96, lo=16, hi=512)
 HYDE_TIMEOUT = 30
 HYDE_SYSTEM = (
