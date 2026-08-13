@@ -501,26 +501,33 @@ class TestRepeatSuppression(unittest.TestCase):
 
     def test_identical_repeat_is_substituted(self):
         # The model stubbornly re-picks the same vault query. Step 2 must not
-        # re-run it; it escalates to the next untried skill instead.
+        # re-run it; it escalates to the next untried skill instead - which is
+        # now connections (ESCALATION_ORDER: search_vault, connections,
+        # web_search, reason). "q" resolves to no vault note, so connections
+        # fails without a model call of its own and step 3 escalates again,
+        # to web_search.
         replies = ["SKILL: search_vault | same query", "INSUFFICIENT",
-                   "SKILL: search_vault | same query", "web answer",
-                   "SKILL: search_vault | same query", "reasoned answer"]
+                   "SKILL: search_vault | same query",
+                   "SKILL: search_vault | same query", "web answer"]
         model = FakeModel(replies)
         ctx = make_ctx(model, retrieve=lambda q, k: [META["by_id"][0]],
                        gather_web=lambda q: [("https://ex.org/a", "text")])
         with SkillsOn():
             r = bs.answer_with_skills(ctx, "q")
-        self.assertEqual([t["skill"] for t in r.trace][:2],
-                         ["search_vault", "web_search"])
+        self.assertEqual([t["skill"] for t in r.trace][:3],
+                         ["search_vault", "connections", "web_search"])
         self.assertEqual(r.skill, "web_search")
 
     def test_exhausted_when_every_skill_is_spent(self):
-        # Web off, so only search_vault and reason are reachable. Both fail,
-        # the model keeps repeating, and the loop stops rather than spinning.
+        # Web off, so search_vault, connections, and reason are reachable
+        # (web_search/fetch_url are not). All three fail, the model keeps
+        # repeating, and the loop stops rather than spinning. "q" resolves to
+        # no vault note, so connections fails without spending a model call.
         replies = ["SKILL: search_vault | q", "INSUFFICIENT",
+                   "SKILL: search_vault | q",
                    "SKILL: search_vault | q", "",
-                   "SKILL: search_vault | q", ""]
-        ctx = make_ctx(FakeModel(replies), web_enabled=False,
+                   "SKILL: search_vault | q"]
+        ctx = make_ctx(FakeModel(replies), web_enabled=False, max_steps=5,
                        retrieve=lambda q, k: [META["by_id"][0]])
         with SkillsOn():
             r = bs.answer_with_skills(ctx, "q")

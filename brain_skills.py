@@ -20,10 +20,11 @@ WHY NOT JSON TOOL CALLS: llama3.2:3b cannot reliably emit JSON. This codebase
 already proved the working shape - a single-line prefix protocol with a
 permissive fallback (brain.py ROUTE_SYSTEM at :1668 and its parse at :2556-2558,
 where anything that is not an explicit FETCH becomes a plain SEARCH). The
-protocol here is the same idea with five verbs:
+protocol here is the same idea with six verbs:
 
     SKILL: search_vault | <reformulated query>
     SKILL: get_note     | <note title or alias>
+    SKILL: connections  | <note title to find related notes for>
     SKILL: web_search   | <query>
     SKILL: fetch_url    | <url>
     SKILL: reason
@@ -95,6 +96,17 @@ OBS_TOTAL_CAP = 1200      # all observations together
 # about a fifth of the context, in line with what TOP_K_FAST=6 chunks occupy.
 NOTE_CHAR_CAP = int(os.environ.get("BRAIN_SKILLS_NOTE_CHARS", "3000"))
 
+# connections excerpt cap: each related note contributes a SHORT excerpt, not a
+# whole note - the seed note (capped separately, see _do_connections) is the
+# main event and up to CONN_TOP_K related notes must still fit in one answer
+# call's context alongside it.
+CONN_EXCERPT_CAP = int(os.environ.get("BRAIN_SKILLS_CONN_EXCERPT_CHARS", "500"))
+
+# How many Smart Connections Pro neighbors to pull for the connections skill.
+# Small on purpose: each neighbor also spends CONN_EXCERPT_CAP chars of context
+# alongside the seed note's own (larger) excerpt.
+CONN_TOP_K = int(os.environ.get("BRAIN_SKILLS_CONN_TOP_K", "4"))
+
 # The whole point of a search_vault retry is a WIDER window than the phase-1
 # keep_k (TOP_K_FAST=6 / MULTI_TOP_K): the reformulated query is a second
 # opinion, and narrowing it to the same width would mostly re-fetch the same
@@ -139,6 +151,10 @@ LABEL_REASONED = (
 PROVENANCE_LABELS = {
     "search_vault": LABEL_VAULT,
     "get_note": LABEL_VAULT,
+    # connections is embeddings-derived (Smart Connections Pro over vault
+    # notes), not human-authored, but it never leaves the vault, so it gets
+    # the same unlabeled treatment as search_vault/get_note.
+    "connections": LABEL_VAULT,
     "web_search": LABEL_WEB_SEARCH,
     "fetch_url": LABEL_WEB_FETCH,
     "reason": LABEL_REASONED,
@@ -146,17 +162,22 @@ PROVENANCE_LABELS = {
 
 # ---- Protocol --------------------------------------------------------------
 
-SKILL_NAMES = ("search_vault", "get_note", "web_search", "fetch_url", "reason")
+SKILL_NAMES = ("search_vault", "get_note", "connections", "web_search",
+               "fetch_url", "reason")
 WEB_SKILLS = ("web_search", "fetch_url")
 
 # Preference order used when the model repeats itself: cheapest and most likely
 # to actually help first. Mirrors the loop's whole thesis - re-retrieval beats
-# the web, and the web beats unsourced recall.
-ESCALATION_ORDER = ("search_vault", "web_search", "reason")
+# the web, and the web beats unsourced recall. connections sits right after
+# search_vault (before web_search): it is still free, local, no-network, and a
+# graph-expansion retry over the vault's own Smart Connections Pro embeddings
+# is a cheaper, more-likely-to-help second try than leaving the vault entirely.
+ESCALATION_ORDER = ("search_vault", "connections", "web_search", "reason")
 
 _MENU_LINES = {
     "search_vault": "SKILL: search_vault | <the same question worded differently for a vault search>",
     "get_note": "SKILL: get_note | <the exact title of one vault note>",
+    "connections": "SKILL: connections | <the exact title of one vault note to find related notes for>",
     "web_search": "SKILL: web_search | <a short web search query>",
     "fetch_url": "SKILL: fetch_url | <one full https url>",
     "reason": "SKILL: reason | answer from your own general knowledge",
@@ -180,6 +201,10 @@ def build_skill_system(web_enabled=True):
         "Prefer search_vault first when the question sounds like it belongs to "
         "a personal research vault about deafness, sign language, or education "
         "and the earlier wording may simply have missed.")
+    lines.append(
+        "Prefer connections when an earlier get_note or search_vault already "
+        "found ONE relevant vault note but the question seems broader than "
+        "that single note covers.")
     lines.append("Output only that one line. No explanation, no extra lines.")
     return "\n".join(lines)
 
@@ -632,6 +657,55 @@ def _do_get_note(ctx, question, arg):
     return (answer, sources, "get_note"), None
 
 
+def _do_connections(ctx, question, arg):
+    """Explicit, mid-conversation pull of Smart Connections Pro graph data.
+
+    Separate from (and does not depend on) brain.py's automatic
+    expand_with_obsidian_signal - that path runs unconditionally in the
+    background on every retrieval; this one is a skill the model can choose to
+    reach for on purpose. Same permissive philosophy: a missing export, an
+    unindexed seed note, or zero neighbors all degrade to answering from the
+    seed note's own text (or to a plain "no data" observation), never to a
+    crash or a dead end."""
+    if not arg:
+        return None, "connections: no note or topic given"
+    source = resolve_note(ctx.meta or {}, arg)
+    if not source:
+        return None, "connections '%s': no vault note by that name" % arg
+
+    chunks = []
+    seed_text = note_text(ctx.meta or {}, source, cap=NOTE_CHAR_CAP // 2)
+    if seed_text:
+        chunks.append({"source": source, "text": seed_text})
+
+    related_count = 0
+    try:
+        import obsidian_rank
+        vectors = obsidian_rank.load_note_vectors_from_export()
+        if vectors and source in vectors:
+            neighbors = obsidian_rank.nearest_neighbors(
+                vectors, source, top_k=CONN_TOP_K)
+            for path, _score in neighbors:
+                excerpt = note_text(ctx.meta or {}, path, cap=CONN_EXCERPT_CAP)
+                if excerpt:
+                    chunks.append({"source": path, "text": excerpt})
+                    related_count += 1
+    except Exception as exc:
+        # No Smart Connections data available (module missing, export missing,
+        # a malformed export, anything else) - fall through to the seed note's
+        # own text rather than failing the whole skill.
+        _log("connections: obsidian_rank unavailable (%s)" % exc)
+
+    if not chunks:
+        return None, "connections '%s': note '%s' has no text" % (arg, source)
+
+    answer, sources = _try_vault_answer(ctx, question, chunks, "connections")
+    if not answer:
+        return None, ("connections '%s': note '%s' plus %d related notes "
+                      "still did not answer it" % (arg, source, related_count))
+    return (answer, sources, "connections"), None
+
+
 def _do_web_search(ctx, question, arg):
     if ctx.gather_web is None:
         return None, "web_search: web access is not available"
@@ -681,6 +755,7 @@ def _do_reason(ctx, question, arg):
 _DISPATCH = {
     "search_vault": _do_search_vault,
     "get_note": _do_get_note,
+    "connections": _do_connections,
     "web_search": _do_web_search,
     "fetch_url": _do_fetch_url,
     "reason": _do_reason,
