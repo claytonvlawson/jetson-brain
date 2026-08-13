@@ -2532,12 +2532,6 @@ def handle_question(model, question, history, bm25, chunks, meta, web_enabled, r
 # no-outside-knowledge rules must survive verbatim or _is_insufficient,
 # faithfulness_flags, and chat_stream_holdback all stop working.
 _INTENT_DIRECTIVES = {
-    "factual_short": (
-        " OVERRIDE the length guidance above for this question: it asks for one "
-        "specific fact. State that fact in your FIRST sentence, directly and "
-        "completely, then add at most two short sentences of supporting context "
-        "from the snippets. Do not open with background. Do not write an essay."
-    ),
     "multi": (
         " This question has several parts. Answer EVERY part, in the order "
         "asked, and say plainly which parts the snippets do not cover rather "
@@ -2545,11 +2539,61 @@ _INTENT_DIRECTIVES = {
     ),
 }
 
+# The length instruction, SUBSTITUTED rather than contradicted.
+#
+# The base prompts end with an unconditional "Aim for ... about 5 to 8
+# sentences" (7 to 12 for the parent persona), and the factual_short directive
+# used to be appended immediately after it saying "OVERRIDE the length guidance
+# above ... at most two short sentences. Do not write an essay." So a 3B model
+# received two directly opposed length instructions in adjacent sentences of
+# one system message and had to resolve the conflict by meta-instruction.
+# Recency helps but does not guarantee it, and on the parent persona the gap is
+# wider still (7-12 sentences vs at most two).
+#
+# Substituting the sentence removes the contradiction instead of asking the
+# model to arbitrate it. The grounding contract is untouched BY CONSTRUCTION:
+# only this one trailing sentence is replaced, so the INSUFFICIENT sentinel,
+# the cite-by-filename rule and the no-outside-knowledge clause stay
+# byte-identical -- which _is_insufficient, faithfulness_flags and
+# chat_stream_holdback all depend on.
+_LENGTH_SENTENCES = (
+    "Aim for a clear, well organized answer of about 5 to 8 sentences.",
+    "Aim for a clear, warm answer of about 7 to 12 sentences, and use short "
+    "paragraphs or a short list when that is easier for a stressed parent to "
+    "follow.",
+)
+
+_LENGTH_OVERRIDES = {
+    "factual_short": (
+        "This question asks for one specific fact. State that fact in your "
+        "FIRST sentence, directly and completely, then add at most two short "
+        "sentences of supporting context from the snippets. Do not open with "
+        "background. Do not write an essay."
+    ),
+}
+
 
 def _shape_for_intent(system_prompt, intent):
-    """Append the intent directive to a base system prompt. Unknown or
-    'analytic' intents get the prompt back unchanged."""
-    return system_prompt + _INTENT_DIRECTIVES.get(intent, "")
+    """Apply the intent's shaping to a base system prompt.
+
+    A length override REPLACES the base length sentence; other directives are
+    appended. Unknown or 'analytic' intents get the prompt back unchanged.
+    If the expected length sentence is ever reworded and no longer matches,
+    this falls back to appending, which is the old behavior -- degraded, but
+    never silently dropping the instruction."""
+    out = system_prompt
+    override = _LENGTH_OVERRIDES.get(intent)
+    if override:
+        for sentence in _LENGTH_SENTENCES:
+            if sentence in out:
+                out = out.replace(sentence, override, 1)
+                break
+        else:
+            out = out + " " + override
+    directive = _INTENT_DIRECTIVES.get(intent, "")
+    if directive:
+        out = out + directive
+    return out
 
 
 def retrieve_context(question, bm25, chunks, meta, model=None,

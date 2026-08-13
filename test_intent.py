@@ -223,19 +223,56 @@ brain.DECOMPOSE_ENABLED = _saved_decompose
 
 
 # -- _shape_for_intent -------------------------------------------------------
-# The grounding contract is load-bearing for three separate mechanisms
-# (_is_insufficient, faithfulness_flags, chat_stream_holdback). Shaping must
-# APPEND only; if it ever rewrites the base prompt, all three break silently.
-for intent in ("factual_short", "multi", "analytic", "nonsense"):
-    shaped = brain._shape_for_intent(brain.VAULT_FIRST_SYSTEM, intent)
-    check_true("%s keeps the base prompt verbatim" % intent,
-               shaped.startswith(brain.VAULT_FIRST_SYSTEM))
-    check_true("%s keeps the INSUFFICIENT sentinel" % intent, "INSUFFICIENT" in shaped)
-    check_true("%s keeps the citation rule" % intent, "Cite the" in shaped)
+# The GROUNDING CONTRACT is load-bearing for three separate mechanisms
+# (_is_insufficient, faithfulness_flags, chat_stream_holdback), so every clause
+# they depend on must survive shaping verbatim.
+#
+# Shaping used to be append-only and this block asserted startswith(base). That
+# was too strong a proxy for the real invariant: it also froze the base
+# prompt's trailing LENGTH sentence, which is exactly the text that needed to
+# change, and so forced factual_short to be phrased as "OVERRIDE the length
+# guidance above" -- a direct self-contradiction handed to a 3B model in
+# adjacent sentences. The length sentence is substituted now. What must not
+# change is the contract, so assert the contract itself, not a prefix.
+CONTRACT_CLAUSES = (
+    "reply with EXACTLY the single word INSUFFICIENT",
+    "Cite the sources by filename when you use them.",
+    "Do not guess, do not use outside knowledge",
+    "Use only the provided context.",
+)
+for base_name, base in (("vault", brain.VAULT_FIRST_SYSTEM),
+                        ("parent", brain.PARENT_SYSTEM)):
+    for intent in ("factual_short", "multi", "analytic", "nonsense"):
+        shaped = brain._shape_for_intent(base, intent)
+        for clause in CONTRACT_CLAUSES:
+            check_true("%s/%s keeps: %s" % (base_name, intent, clause[:38]),
+                       clause in shaped)
 
-check_true("factual_short actually shortens the answer",
+# The contradiction must be GONE: no shaped prompt may state a sentence range
+# and then instruct the model to override it.
+for base in (brain.VAULT_FIRST_SYSTEM, brain.PARENT_SYSTEM):
+    for intent in ("factual_short", "multi", "analytic"):
+        check_true("no OVERRIDE meta-instruction (%s)" % intent,
+                   "OVERRIDE the length guidance"
+                   not in brain._shape_for_intent(base, intent))
+    short = brain._shape_for_intent(base, "factual_short")
+    check_true("factual_short drops the long-answer target",
+               "5 to 8 sentences" not in short and "7 to 12 sentences" not in short,
+               repr(short[-160:]))
+    check_true("factual_short states the short target exactly once",
+               short.count("FIRST sentence") == 1)
+
+# Non-length intents still append, so the base survives as a prefix there.
+for intent in ("multi", "analytic", "nonsense"):
+    check_true("%s still appends" % intent,
+               brain._shape_for_intent(brain.VAULT_FIRST_SYSTEM, intent)
+               .startswith(brain.VAULT_FIRST_SYSTEM))
+
+# If the base length sentence is ever reworded, substitution cannot match and
+# must DEGRADE TO APPENDING rather than silently dropping the instruction.
+check_true("unmatched base still receives the directive",
            "FIRST sentence" in brain._shape_for_intent(
-               brain.VAULT_FIRST_SYSTEM, "factual_short"))
+               "A prompt with no length sentence.", "factual_short"))
 check("analytic is unchanged",
       brain._shape_for_intent(brain.VAULT_FIRST_SYSTEM, "analytic"),
       brain.VAULT_FIRST_SYSTEM)
@@ -243,6 +280,10 @@ check_true("parent persona also shapes",
            "EVERY part" in brain._shape_for_intent(brain.PARENT_SYSTEM, "multi"))
 check_true("parent persona keeps its warmth under shaping",
            "warm" in brain._shape_for_intent(brain.PARENT_SYSTEM, "factual_short"))
+# The parent rule most worth losing sleep over if shaping ever rewrites text.
+check_true("parent persona never loses its no-blame rule",
+           "Never shame or blame a parent"
+           in brain._shape_for_intent(brain.PARENT_SYSTEM, "factual_short"))
 
 
 if FAILURES:
