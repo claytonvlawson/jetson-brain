@@ -670,6 +670,51 @@ def build_parser():
     return p
 
 
+def env_fingerprint():
+    """Record which arm produced this artifact.
+
+    eval_retrieval.py has carried one of these for a while; the judged harness
+    did not, so its artifacts recorded a score with no way to tell what code
+    path earned it. That is how AFTER_gold_questions_15of28.json ended up being
+    read as a baseline for a retriever it never ran against.
+
+    Every value is read off the BRAIN MODULE rather than re-derived from the
+    environment with a default restated here. Restating is how an artifact
+    mislabels its own arm: BRAIN_DECOMPOSE's default flipped 1->0 and
+    BRAIN_HYDE's flipped 0->1, and any copy of the old default records an arm
+    the run never used. brain's constants resolve at import time, so these are
+    what the code WILL DO -- the only thing worth fingerprinting.
+
+    The generation knobs matter here and nowhere else: eval_retrieval.py stops
+    at retrieval, so num_ctx, num_predict and the context-fit budget are
+    invisible to it. They are exactly the arms a judged run exists to price.
+    """
+    def flag(v):
+        return "1" if v else "0"
+
+    gen = getattr(brain, "GEN_OPTIONS", {}) or {}
+    return {
+        "index": os.environ.get("BRAIN_INDEX", brain.INDEX_PATH),
+        # Retrieval arms.
+        "BRAIN_HYBRID": flag(brain.HYBRID_ENABLED),
+        "BRAIN_HYDE": flag(brain.HYDE_ENABLED),
+        "BRAIN_DECOMPOSE": flag(brain.DECOMPOSE_ENABLED),
+        "BRAIN_TOP_K_FAST": str(brain.TOP_K_FAST),
+        "BRAIN_ANN": flag(brain.ANN_ENABLED),
+        "BRAIN_OBSIDIAN_RANK": flag(brain.OBSIDIAN_RANK_ENABLED),
+        "BRAIN_OBSIDIAN_BLOCKS": flag(brain.OBSIDIAN_BLOCKS_ENABLED),
+        "BRAIN_SKILLS": flag(getattr(brain, "SKILLS_ENABLED", False)),
+        "BRAIN_AUTOLEARN": flag(brain.AUTOLEARN_ENABLED),
+        # Generation arms -- judged-only territory.
+        "num_ctx": gen.get("num_ctx"),
+        "num_predict": gen.get("num_predict"),
+        "temperature": gen.get("temperature"),
+        "BRAIN_CTX_FIT": flag(brain.CTX_FIT_ENABLED),
+        "CTX_RESERVE_TOKENS": getattr(brain, "CTX_RESERVE_TOKENS", None),
+        "CHARS_PER_TOKEN": getattr(brain, "CHARS_PER_TOKEN", None),
+    }
+
+
 def main():
     start = time.time()
     args = build_parser().parse_args()
@@ -877,6 +922,7 @@ def main():
     if args.as_json:
         print(json.dumps({
             "gold": args.gold, "model": args.model, "judge": args.judge_model,
+            "env": env_fingerprint(),
             "threshold": args.threshold, "results": results, "gaps": gaps,
             "passed": len([r for r in results if r["score"] >= args.threshold]),
             "failed": len([r for r in results if 0 <= r["score"] < args.threshold]),

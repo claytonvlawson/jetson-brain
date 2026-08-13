@@ -73,11 +73,38 @@ DEEP_MODEL = "qwen2.5:7b"
 # context window and a low temperature for grounded answers.
 GEN_OPTIONS = {
     "num_predict":    640,   # was 200, then 512 — room for fuller, fact-complete answers
-    "num_ctx":       6144,   # was 3072, then 4096 — headroom for TOP_K_FAST=6 + linked chunks
+    "num_ctx":       8192,   # was 3072, 4096, then 6144 — see the measurement below
     "temperature":    0.2,   # tighter citation adherence; BRAIN_TEMPERATURE overrides
     "repeat_penalty": 1.1,   # prevent looping on long outputs
     "num_gpu":        999,   # all layers on GPU, no CPU offload
 }
+
+# num_ctx was raised 6144 -> 8192 on measurement, not on intuition. Probing all
+# 40 retrieval_gold questions through the real path (retrieve_context ->
+# expand_with_links -> fit_context) showed the budget was binding hard:
+#
+#   questions that lost a chunk to fit_context : 17 of 40 (42.5%)
+#   chunks dropped                             : 26 (up to 4 on one question)
+#   estimated prompt tokens min/mean/max       : 2909 / 4662 / 5371
+#   budget at num_ctx=6144                     : 5376
+#
+# The max estimate landed 5 tokens under the budget, so retrieval was routinely
+# handing the model chunks that fit_context then threw away. Production sends
+# ~11 chunks, not TOP_K_FAST=8: expand_with_links adds roughly three more after
+# retrieval, and the old comment on this line still assumed a 6-chunk window.
+#
+# At 8192 the budget becomes 7424, which clears the observed 5371 maximum with
+# room to spare and takes the drop count to zero. The cost is KV cache: llama3.2
+# 3B is 28 layers x 8 KV heads x 128 head_dim, so 2 * 8 * 128 * 28 = 57344
+# values per token, and Ollama on the Jetson runs OLLAMA_KV_CACHE_TYPE=q8_0
+# (~1 byte/value), i.e. ~56 KB/token -- about 336 MB at 6144 and 448 MB at 8192.
+# The extra ~112 MB fits the ~1.0 GB the Orin had free with the 3B resident.
+# Do not raise this further without re-checking `free -m` on the device: the
+# same arithmetic puts 12288 at ~672 MB, which does not fit.
+try:
+    GEN_OPTIONS["num_ctx"] = int(os.environ["BRAIN_NUM_CTX"])
+except (KeyError, ValueError):
+    pass
 
 # Eval reproducibility: BRAIN_TEMPERATURE=0 makes generation deterministic so
 # an A/B between two configs measures the change, not sampling noise. Unset
@@ -1963,11 +1990,33 @@ VAULT_FIRST_SYSTEM = (
     "discuss the topic but lack the exact fact asked for, state what the "
     "snippets DO support and say plainly that the specific detail is not in "
     "the vault. "
-    "Answer thoroughly: cover every relevant point the snippets support, and "
-    "name the specific scholars, articles, terms, and definitions that appear "
-    "in them (for example a named researcher, a CRPD article number, or a "
-    "defined term) whenever the snippets provide them. Aim for a clear, well "
-    "organized answer of about 5 to 8 sentences. Use only the provided context."
+    "Answer thoroughly: cover every relevant point the snippets support. "
+    "Aim for a clear, well organized answer of about 5 to 8 sentences. "
+    "Use only the provided context.\n"
+    # The attribution requirement used to live mid-paragraph, phrased as "name
+    # the specific scholars, articles, terms and definitions ... whenever the
+    # snippets provide them", and the 3B ignored it. The judged failure
+    # taxonomy is unambiguous about the cost: of 13 failures on gold_questions,
+    # 10 scored 80-86, which under --isolate per-fact grading is ONE missing
+    # fact out of five to seven, and the missing fact was a name almost every
+    # time -- Bauman and Murray for Deaf Gain, Tom Humphries for audism,
+    # Bahan/Lane/Hoffmeister for DEAF-WORLD, Stokoe and Battison for the sign
+    # parameters, Wyatte Hall for language deprivation, Frederick and Columbia
+    # for MSD's campuses. Retrieval had already delivered 6-11 sources on every
+    # one of those, so the snippets contained the name and the answer left it
+    # out.
+    #
+    # This is now a separate, terse, FINAL instruction rather than a clause
+    # buried in a long paragraph. A 3B follows the last thing it read far more
+    # reliably than the middle of a wall of text, and lengthening the prompt is
+    # itself a known hazard here (a 700-word filler prompt measurably broke the
+    # grounding contract), so this replaces the old clause rather than adding
+    # to it.
+    "One more requirement: when a snippet attributes something to a named "
+    "person, school, place, or year -- who coined a term, who wrote a work, "
+    "where an institution sits, when it was founded -- name them explicitly. "
+    "Naming who or where a claim comes from is part of answering, not "
+    "optional detail."
 )
 
 # Parent persona: same grounding contract as VAULT_FIRST_SYSTEM (snippets-only,
