@@ -1,0 +1,1243 @@
+{
+  "gold": "gold_questions.jsonl",
+  "model": "llama3.2:3b",
+  "judge": "llama3.2:3b",
+  "threshold": 90,
+  "results": [
+    {
+      "id": "language_deprivation_1",
+      "question": "Our pediatrician told us that once our deaf son gets his cochlear implant he really won't need to learn to sign, and honestly I've heard that starting ASL now could slow down his spoken English. Is that right, or would waiting on sign language actually cost him something?",
+      "score": 60,
+      "served_by": "rag",
+      "missing": [
+        "Providing ASL from birth lets the brain acquire language during the early developmental window it is built for",
+        "Wyatte Hall frames early language deprivation as a preventable public-health problem rather than a personal or parental failing"
+      ],
+      "errors": [],
+      "answer_preview": "The snippets from the vault do not provide enough information to answer this question directly.\n\nHowever, the snippets support the following points:\n\n* The evidence base suggests that early sign expos",
+      "n_sources": 9,
+      "sources": [
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "Sources/Language Deprivation/Gulati 2018 - Language Deprivation Syndrome.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/ASL Linguistics and Acquisition/Hall Hall Caselli 2019 - Deaf Children Need Language.md",
+        "Sources/Language Deprivation/Humphries et al 2014 - Ensuring Language Acquisition.md",
+        "Concepts/Milan 1880 Congress.md"
+      ],
+      "answer_seconds": 19.942,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.061119641000004776,
+        "subq": 2,
+        "dense": 0.08767830200008575,
+        "mode": "hybrid+subq",
+        "expand": 4.025599992019124e-05,
+        "ttft": 10.831671913000037,
+        "phase1": 19.790913618000104,
+        "prompt_eval_count": 4071,
+        "eval_count": 202,
+        "total_duration": 19183999495,
+        "total": 19.942044871000007
+      }
+    },
+    {
+      "id": "language_deprivation_2",
+      "question": "I'm a graduate student and I keep reading that deaf kids who didn't get a full language early on can struggle later with things like planning and memory. What is actually going on developmentally, and which researcher's work should I be citing on this?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The question has several parts. Here are the answers to each part:\n\n1. Can I learn ASL while raising my child?\n\nYes, most hearing parents of deaf children can learn ASL alongside their child, not befo",
+      "n_sources": 9,
+      "sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Researchers FAQ.md",
+        "LanguageDeprivationAgent/References.md",
+        "LanguageDeprivationAgent/Core/Mental Health and Public Health.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "Sources/Language Deprivation/Gulati 2018 - Language Deprivation Syndrome.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "answer_seconds": 33.853,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.051444884999909846,
+        "subq": 2,
+        "dense": 0.04657283500000631,
+        "mode": "hybrid+subq",
+        "expand": 4.6815000132482965e-05,
+        "ttft": 7.867260150999982,
+        "phase1": 33.75245021699993,
+        "prompt_eval_count": 4142,
+        "eval_count": 523,
+        "total_duration": 33743499158,
+        "total": 33.85303464699996
+      }
+    },
+    {
+      "id": "critical_period_1",
+      "question": "My cousin keeps telling me our deaf toddler will pick up signing whenever she's good and ready, so honestly, is there any real harm in just holding off on ASL until she's a bit older?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The snippets from the vault do not provide enough information to answer this question directly. However, they do suggest that waiting too long to introduce sign language can lead to potential issues (",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Key Datasets and Instruments.md"
+      ],
+      "answer_seconds": 14.957,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.02123213400000168,
+        "subq": 0,
+        "dense": 0.05389759999980015,
+        "mode": "hybrid",
+        "expand": 4.201599995212746e-05,
+        "ttft": 6.734182945000157,
+        "phase1": 14.87948461200017,
+        "prompt_eval_count": 3589,
+        "eval_count": 194,
+        "total_duration": 14877258829,
+        "total": 14.956985536000047
+      }
+    },
+    {
+      "id": "critical_period_2",
+      "question": "Our audiologist wants us to focus on a cochlear implant and spoken English first and skip signing for now to avoid confusing our baby, but I keep reading warnings about timing, so what does the science actually say about how waiting affects a deaf child's language development?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The vault snippets do not provide enough information to answer this question directly. The snippets discuss the risks of Language Deprivation and the importance of early sign language exposure, but th",
+      "n_sources": 7,
+      "sources": [
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "Sources/ASL Linguistics and Acquisition/Hall Hall Caselli 2019 - Deaf Children Need Language.md",
+        "Sources/Language Deprivation/Humphries et al 2014 - Ensuring Language Acquisition.md",
+        "Concepts/Milan 1880 Congress.md"
+      ],
+      "answer_seconds": 19.749,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.022442142999807402,
+        "subq": 0,
+        "dense": 0.047866376000001765,
+        "mode": "hybrid",
+        "expand": 3.673500009426789e-05,
+        "ttft": 6.7349069280001,
+        "phase1": 19.67696561699995,
+        "prompt_eval_count": 3715,
+        "eval_count": 280,
+        "total_duration": 19674000163,
+        "total": 19.749345618999996
+      }
+    },
+    {
+      "id": "asl_full_language_1",
+      "question": "My mother-in-law keeps insisting that what Deaf people do with their hands is basically English acted out, so it doesn't really count as a language of its own. Is she right?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The concept of ASL being treated as \"English on the hands\" is addressed in the provided snippets. According to Battison (1978) and Brentari's foreword, fingerspelling in ASL does not remain faithful t",
+      "n_sources": 9,
+      "sources": [
+        "People/Robbin Battison.md",
+        "Concepts/American Sign Language.md",
+        "Concepts/Linguistic Human Rights.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Other Deaf Resources DMV.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/De Meulder Murray 2017 - Buttering Their Bread on Both Sides.md",
+        "Concepts/Deaf Epistemology.md",
+        "Datasets/ASL-LEX.md",
+        "CRPD/Article 2 Definitions.md"
+      ],
+      "answer_seconds": 20.277,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.016208486999857996,
+        "subq": 0,
+        "dense": 0.05252484000016011,
+        "mode": "hybrid",
+        "expand": 3.5326999977769447e-05,
+        "ttft": 7.712243494999939,
+        "phase1": 20.206501806999995,
+        "prompt_eval_count": 3758,
+        "eval_count": 283,
+        "total_duration": 20204091755,
+        "total": 20.27746496399982
+      }
+    },
+    {
+      "id": "asl_full_language_2",
+      "question": "I just got a Deaf student who signs, and I earnestly want to understand what linguists have actually established that makes ASL a complete language on par with spoken ones rather than a simplified communication system. Can you walk me through it?",
+      "score": 80,
+      "served_by": "rag",
+      "missing": [
+        "Stokoe (1960) identified the building-block parameters of signs (handshape, location, movement), and Robbin Battison later added palm orientation as a fourth parameter"
+      ],
+      "errors": [],
+      "answer_preview": "ASL (American Sign Language) is considered a full-fledged language by linguists due to its complexity, structure, and functionality. Research has shown that ASL possesses all the characteristics of a ",
+      "n_sources": 11,
+      "sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/Sign Language AI and Ethics/Atwell et al 2025 - Nothing About Us Without Us.md",
+        "LanguageDeprivationAgent/Local Resources DMV/ASL Classes for Families DC Maryland.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "Sources/Language Deprivation/Gulati 2018 - Language Deprivation Syndrome.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Sources/ASL Linguistics and Acquisition/Hall Hall Caselli 2019 - Deaf Children Need Language.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "answer_seconds": 40.187,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.04627581499994449,
+        "subq": 2,
+        "dense": 0.049063300000170784,
+        "mode": "hybrid+subq",
+        "expand": 4.790299999513081e-05,
+        "ttft": 8.016321816000072,
+        "phase1": 40.08868472100016,
+        "prompt_eval_count": 4224,
+        "eval_count": 627,
+        "total_duration": 40085966932,
+        "total": 40.186663641999985
+      }
+    },
+    {
+      "id": "bilingual_bimodal_1",
+      "question": "My baby was just identified as deaf and her pediatrician says we should pour everything into speech therapy and worry about reading later. Is there any real harm in raising her with sign language and written English side by side from the very start instead?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The evidence suggests that raising a child with sign language and written English side by side from the beginning is not harmful and may even be beneficial. According to the LanguageDeprivationAgent/P",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "Organizations/European Union of the Deaf.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md"
+      ],
+      "answer_seconds": 23.263,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.020333381999989797,
+        "subq": 0,
+        "dense": 0.07226264700011598,
+        "mode": "hybrid",
+        "expand": 4.5503000137614436e-05,
+        "ttft": 6.362456776000045,
+        "phase1": 23.167674247999912,
+        "prompt_eval_count": 3363,
+        "eval_count": 357,
+        "total_duration": 23165353993,
+        "total": 23.262842528000192
+      }
+    },
+    {
+      "id": "bilingual_bimodal_2",
+      "question": "Isn't teaching a deaf kid ASL and English at the same time just doubling the workload and setting both languages up to lag? Why do Deaf schools insist on running the two together rather than committing to one?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The snippets from the vault support that teaching a deaf child ASL and English simultaneously, as in Deaf schools, is not about \"doubling the workload\" but rather about creating an immersive environme",
+      "n_sources": 10,
+      "sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Other Deaf Resources DMV.md",
+        "Sources/De Meulder 2016 - Promotion in Times of Endangerment Finland.md",
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "Sources/Language Deprivation/Glickman and Hall 2018 - Language Deprivation and Deaf Mental Health.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md"
+      ],
+      "answer_seconds": 28.172,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.044338743000025715,
+        "subq": 2,
+        "dense": 0.04646562300013102,
+        "mode": "hybrid+subq",
+        "expand": 5.004700005883933e-05,
+        "ttft": 6.975204348000034,
+        "phase1": 28.07820039299986,
+        "prompt_eval_count": 3673,
+        "eval_count": 436,
+        "total_duration": 28075871980,
+        "total": 28.171482162000075
+      }
+    },
+    {
+      "id": "deaf_gain_1",
+      "question": "The audiologist keeps describing my toddler's deafness only as a loss we need to correct, and it makes me uneasy. Is there a serious way of thinking that treats growing up deaf as adding something valuable to a child's life rather than just a shortfall?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The concept you're referring to is Deaf Gain, which reframes deafness not as a deficit or loss but as a form of human diversity that yields distinct cognitive, creative, cultural, and linguistic contr",
+      "n_sources": 9,
+      "sources": [
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "People/H-Dirksen L Bauman.md",
+        "People/Joseph J Murray.md",
+        "Organizations/Gallaudet University.md"
+      ],
+      "answer_seconds": 30.875,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.04469357800007856,
+        "subq": 2,
+        "dense": 0.04716755499998726,
+        "mode": "hybrid+subq",
+        "expand": 3.817599986177811e-05,
+        "ttft": 7.8185051610000755,
+        "phase1": 30.727317342000106,
+        "prompt_eval_count": 4149,
+        "eval_count": 464,
+        "total_duration": 30718155181,
+        "total": 30.874824380999826
+      }
+    },
+    {
+      "id": "deaf_gain_2",
+      "question": "A friend mentioned there's a phrase first spoken by a Deaf performance artist and later developed by two scholars that deliberately turns the whole idea of 'hearing loss' upside down. Who originated it and what is it actually claiming?",
+      "score": 83,
+      "served_by": "rag",
+      "missing": [
+        "The term was developed and theorized by H-Dirksen Bauman and Joseph Murray"
+      ],
+      "errors": [],
+      "answer_preview": "The phrase \"Deaf Gain\" was first voiced by Aaron Williamson, a Deaf British performance artist, who became progressively deaf over the course of some twenty years.\n\nAccording to Bauman and Murray's ac",
+      "n_sources": 10,
+      "sources": [
+        "Concepts/Deaf Gain.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "People/Wyatte C. Hall.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "Sources/Sign Language AI and Ethics/Atwell et al 2025 - Nothing About Us Without Us.md",
+        "Sources/Grosjean 2001 - The Right of the Deaf Child to Grow Up Bilingual.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "People/H-Dirksen L Bauman.md",
+        "People/Joseph J Murray.md",
+        "Organizations/Gallaudet University.md"
+      ],
+      "answer_seconds": 12.799,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.04709212300008403,
+        "subq": 2,
+        "dense": 0.09055416299997887,
+        "mode": "hybrid+subq",
+        "expand": 3.760000004149333e-05,
+        "ttft": 7.200979615000051,
+        "phase1": 12.65833183299992,
+        "prompt_eval_count": 4065,
+        "eval_count": 144,
+        "total_duration": 12645876933,
+        "total": 12.798573051999938
+      }
+    },
+    {
+      "id": "crpd_language_rights_1",
+      "question": "A relative keeps insisting that treating sign language as a 'real language' with equal standing is just feel-good political correctness with no legal weight behind it. Is there actually a binding international agreement that backs the idea that signed languages count as full languages?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The concept of \"language\" in Article 2 Definitions of the UN Convention on the Rights of Persons with Disabilities (CRPD) includes both spoken and signed languages, making American Sign Language (ASL)",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "International-Law/Northern Ireland Sign Language Bill 2026.md",
+        "Concepts/CRPD.md",
+        "Concepts/Linguistic Human Rights.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Hall Research Program Synthesis.md",
+        "LanguageDeprivationAgent/Researcher Briefs/De Meulder Research Program Synthesis.md",
+        "CRPD/Article 2 Definitions.md"
+      ],
+      "answer_seconds": 28.071,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.020814916000063022,
+        "subq": 0,
+        "dense": 0.13673825999990186,
+        "mode": "hybrid",
+        "expand": 4.099099987797672e-05,
+        "ttft": 7.35070182100003,
+        "phase1": 27.91121186600003,
+        "prompt_eval_count": 3844,
+        "eval_count": 425,
+        "total_duration": 27908660101,
+        "total": 28.07089457400002
+      }
+    },
+    {
+      "id": "crpd_language_rights_2",
+      "question": "My daughter is deaf and her school keeps framing signing as an optional therapy service they can cut when budgets are tight. Does any human rights treaty actually say she has a right to be educated in a signed language rather than it being a favor they choose to grant?",
+      "score": 83,
+      "served_by": "rag",
+      "missing": [
+        "Article 24 calls for Deaf adult role models and environments that support the child's language and identity"
+      ],
+      "errors": [],
+      "answer_preview": "The World Federation of the Deaf (WFD) interprets CRPD Article 24 as requiring sign language education as a fundamental right, not an optional service. This is supported by General Comment No. 4 and o",
+      "n_sources": 7,
+      "sources": [
+        "Sources/De Meulder 2018 - Education in Sign Language as Human Right.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "Thesis/Central Argument.md",
+        "Thesis/Outline.md",
+        "Concepts/Linguistic Human Rights.md"
+      ],
+      "answer_seconds": 18.254,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.02681479800003217,
+        "subq": 0,
+        "dense": 0.0469919199999822,
+        "mode": "hybrid",
+        "expand": 4.2942999925799086e-05,
+        "ttft": 6.668690503999869,
+        "phase1": 18.178262946999894,
+        "prompt_eval_count": 3096,
+        "eval_count": 267,
+        "total_duration": 18175822925,
+        "total": 18.254460791999918
+      }
+    },
+    {
+      "id": "legal_recognition_1",
+      "question": "Our government just passed a law that officially names our national sign language, so does that mean Deaf people in our country now have everything they need?",
+      "score": 80,
+      "served_by": "rag",
+      "missing": [
+        "Meaningful recognition attaches actual rights and resources such as access to education, interpreting, and public services in sign, not just words"
+      ],
+      "errors": [],
+      "answer_preview": "The passage of the Northern Ireland Sign Language Bill 2026 provides formal recognition to British Sign Language and Irish Sign Language as languages of Northern Ireland. This includes provisions for ",
+      "n_sources": 8,
+      "sources": [
+        "International-Law/Northern Ireland Sign Language Bill 2026.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Concepts/Deaf Digital Law.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "Sources/De Meulder 2014 - UNCRPD and Sign Language Peoples.md",
+        "US-Law/ADA.md",
+        "CRPD/Article 21 Freedom of Expression.md",
+        "CRPD/Article 24 Education.md"
+      ],
+      "answer_seconds": 19.07,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.016774517999920135,
+        "subq": 0,
+        "dense": 0.045007200000100056,
+        "mode": "hybrid",
+        "expand": 3.625600015766395e-05,
+        "ttft": 6.3352433780000865,
+        "phase1": 19.00596450199987,
+        "prompt_eval_count": 3454,
+        "eval_count": 274,
+        "total_duration": 18997394447,
+        "total": 19.06992394200006
+      }
+    },
+    {
+      "id": "legal_recognition_2",
+      "question": "I teach Deaf students and I'm trying to understand why scholars insist there's a real difference between a country simply mentioning sign language in its constitution and a country that truly protects the rights of its Deaf community. Can you explain what's at stake in that distinction?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The distinction between a country simply mentioning sign language in its constitution and one that truly protects the rights of its Deaf community revolves around the gap between symbolic recognition ",
+      "n_sources": 9,
+      "sources": [
+        "Sources/De Meulder Murray 2017 - Buttering Their Bread on Both Sides.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Sources/De Meulder 2014 - UNCRPD and Sign Language Peoples.md",
+        "Sources/Sign Language AI and Ethics/Atwell et al 2025 - Nothing About Us Without Us.md",
+        "International-Law/Northern Ireland Sign Language Bill 2026.md",
+        "Thesis/Central Argument.md",
+        "Thesis/Outline.md"
+      ],
+      "answer_seconds": 28.153,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.021401307999894925,
+        "subq": 0,
+        "dense": 0.048014329000125144,
+        "mode": "hybrid",
+        "expand": 4.3967000010525226e-05,
+        "ttft": 8.191517329999897,
+        "phase1": 28.080883836999874,
+        "prompt_eval_count": 4491,
+        "eval_count": 394,
+        "total_duration": 28074153462,
+        "total": 28.152897536999944
+      }
+    },
+    {
+      "id": "cochlear_implant_myth_1",
+      "question": "My baby was just approved for a cochlear implant, so is there really any point in also raising her with sign language?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The evidence suggests that early bilingual-bimodal exposure recruits the same language network as early monolingual exposure without interference (VL2 research briefs and Petitto lab's neuroimaging wo",
+      "n_sources": 7,
+      "sources": [
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "Sources/ASL Linguistics and Acquisition/Hall Hall Caselli 2019 - Deaf Children Need Language.md",
+        "Sources/Language Deprivation/Humphries et al 2014 - Ensuring Language Acquisition.md",
+        "Concepts/Milan 1880 Congress.md"
+      ],
+      "answer_seconds": 49.937,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.013037037000003693,
+        "subq": 0,
+        "dense": 0.04744785100001536,
+        "mode": "hybrid",
+        "expand": 4.041500005769194e-05,
+        "ttft": 37.05073108700003,
+        "phase1": 49.87426132900009,
+        "prompt_eval_count": 2849,
+        "eval_count": 290,
+        "total_duration": 49871996476,
+        "total": 49.93716719500003
+      }
+    },
+    {
+      "id": "cochlear_implant_myth_2",
+      "question": "A colleague insists that letting deaf children sign will hold back their speech once they're implanted, so is that claim actually supported by research?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The claim that letting deaf children sign will hold back their speech once they're implanted is not supported by the available evidence. The snippets from the vault suggest that early exposure to sign",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "Sources/Language Deprivation/Gulati 2018 - Language Deprivation Syndrome.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Sources/ASL Linguistics and Acquisition/Hall Hall Caselli 2019 - Deaf Children Need Language.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Core/Mental Health and Public Health.md",
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "answer_seconds": 826.338,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.015709454999978334,
+        "subq": 0,
+        "dense": 0.04768365000018093,
+        "mode": "hybrid",
+        "expand": 4.6270999973785365e-05,
+        "ttft": 806.0548705189999,
+        "phase1": 826.2119034729999,
+        "prompt_eval_count": 2990,
+        "eval_count": 424,
+        "total_duration": 826208862257,
+        "total": 826.3381518189999
+      }
+    },
+    {
+      "id": "gallaudet_1",
+      "question": "My daughter is Deaf, and her IEP team keeps mentioning a school in Washington, D.C. where every class is taught in sign language. What is that place and why would it be a good fit for her?",
+      "score": 43,
+      "served_by": "rag",
+      "missing": [
+        "It refers to Gallaudet University, located in Washington, D.C.",
+        "It was established in 1864 through a federal charter",
+        "It is the only university in the world built from the start for deaf and hard-of-hearing students",
+        "The institution produces Deaf scholars, educators, leaders, and researchers who sustain the community's knowledge"
+      ],
+      "errors": [],
+      "answer_preview": "The school you are referring to is likely Payne Elementary School's DHOH classrooms or the DCPS Audiology Department, but more specifically, the school with a strong focus on Deaf education is the Cle",
+      "n_sources": 10,
+      "sources": [
+        "Sources/Language Deprivation/Gulati 2018 - Language Deprivation Syndrome.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Sources/Sign Language AI and Ethics/Bender 2024 - Resisting Dehumanization in the Age of AI.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "Sources/Language Deprivation/Glickman and Hall 2018 - Language Deprivation and Deaf Mental Health.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "Sources/Language Deprivation/Hall Levin Anderson 2017 - Language Deprivation Syndrome.md"
+      ],
+      "answer_seconds": 31.186,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.04180681999969238,
+        "subq": 3,
+        "dense": 7.943413456000144,
+        "mode": "hybrid+subq",
+        "expand": 0.00023247500030265655,
+        "phase1": 23.128582951000226,
+        "prompt_eval_count": 3952,
+        "eval_count": 142,
+        "total_duration": 20505691386,
+        "total": 31.185977188999914
+      }
+    },
+    {
+      "id": "gallaudet_2",
+      "question": "Honestly, doesn't sending a deaf teenager to a college only for deaf people just wall them off from the hearing world instead of preparing them to live in it?",
+      "score": 50,
+      "served_by": "rag",
+      "missing": [
+        "The school in question, Gallaudet University in Washington, D.C., is the world's only university designed specifically around deaf and hard-of-hearing students",
+        "On this campus being Deaf is the norm and accommodation is built in, not treated as a special exception",
+        "The 1988 Deaf President Now protest, in which students halted the campus until a Deaf president (I. King Jordan) was appointed, is a landmark in Deaf civil rights and self-determination"
+      ],
+      "errors": [],
+      "answer_preview": "The National Deaf Center emphasizes that its goal is not to isolate deaf students but to prepare them to succeed in the hearing world. The center's mission, \"Learn. Connect. Transform,\" suggests a foc",
+      "n_sources": 6,
+      "sources": [
+        "Organizations/National Deaf Center.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md"
+      ],
+      "answer_seconds": 18.962,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.01867678899998282,
+        "subq": 0,
+        "dense": 1.3404145279996555,
+        "mode": "hybrid",
+        "expand": 9.852500033957767e-05,
+        "ttft": 5.951428246999967,
+        "phase1": 17.600368620000154,
+        "prompt_eval_count": 2985,
+        "eval_count": 268,
+        "total_duration": 17598105920,
+        "total": 18.961664078000013
+      }
+    },
+    {
+      "id": "maryland_school_deaf_1",
+      "question": "My son is deaf and everyone keeps telling me the state school up in Frederick would be better for his language than the mainstream program he's in now, but honestly, wouldn't surrounding him with only other deaf kids just hold him back?",
+      "score": 83,
+      "served_by": "rag",
+      "missing": [
+        "The Maryland School for the Deaf (MSD) runs two campuses, in Frederick and Columbia, Maryland."
+      ],
+      "errors": [],
+      "answer_preview": "The Maryland School for the Deaf (MSD) offers a bilingual-bimodal education that combines ASL and English literacy. This environment is designed to provide direct access to fluent signing adults and p",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help DC and Maryland Local Services.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "Concepts/IFSP and Part C Early Intervention.md",
+        "Concepts/EHDI Early Hearing Detection and Intervention.md",
+        "Organizations/Maryland School for the Deaf.md"
+      ],
+      "answer_seconds": 30.266,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.025949710000077175,
+        "subq": 0,
+        "dense": 0.0502452489999996,
+        "mode": "hybrid",
+        "expand": 0.0001277089995710412,
+        "ttft": 6.685840207999718,
+        "phase1": 30.18700074699973,
+        "prompt_eval_count": 3545,
+        "eval_count": 484,
+        "total_duration": 30183396702,
+        "total": 30.265886973000306
+      }
+    },
+    {
+      "id": "maryland_school_deaf_2",
+      "question": "I teach elementary students and I'm trying to understand the actual mechanism: what happens at MSD's Frederick and Columbia campuses that lets a deaf kid who showed up with almost no language finally start catching up?",
+      "score": 83,
+      "served_by": "rag",
+      "missing": [
+        "MSD's Frederick and Columbia campuses provide an environment where language is never a barrier because everyone signs."
+      ],
+      "errors": [],
+      "answer_preview": "The Maryland School for the Deaf (MSD) employs a bilingual-bimodal approach, which is a key factor in helping deaf students catch up on their language skills. According to the MSD's Family Education &",
+      "n_sources": 6,
+      "sources": [
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help DC and Maryland Local Services.md",
+        "Concepts/IFSP and Part C Early Intervention.md",
+        "Concepts/EHDI Early Hearing Detection and Intervention.md"
+      ],
+      "answer_seconds": 35.859,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.02035886199973902,
+        "subq": 0,
+        "dense": 0.045253619000050094,
+        "mode": "hybrid",
+        "expand": 9.090999992622528e-05,
+        "phase1": 4.704968817000008,
+        "prompt_eval_count": 3870,
+        "eval_count": 4,
+        "total_duration": 4702683845,
+        "total": 35.85945694100019
+      }
+    },
+    {
+      "id": "deaf_community_transmission_1",
+      "question": "My newborn is deaf and no one in our family signs. Won't she just soak up ASL from us at home, the same way a hearing baby picks up whatever language the parents speak?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The question of whether a child will \"soak up\" sign language from their hearing parents if they don't have early exposure to it is not supported by evidence. The LanguageDeprivationAgent/Parent Guidan",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Newborn Hearing Screening EHDI DC Maryland.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md"
+      ],
+      "answer_seconds": 23.618,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.02203991100031999,
+        "subq": 0,
+        "dense": 0.045979201999671204,
+        "mode": "hybrid",
+        "expand": 0.00010866899992834078,
+        "ttft": 7.318015744000149,
+        "phase1": 23.547160875000372,
+        "prompt_eval_count": 3488,
+        "eval_count": 353,
+        "total_duration": 23544740931,
+        "total": 23.61765941900012
+      }
+    },
+    {
+      "id": "deaf_community_transmission_2",
+      "question": "I just started teaching in a Deaf education program and I'm surprised how much the older Deaf students and the Deaf staff seem to shape the little ones' language and identity. Why does so much of that come from the community instead of from the kids' own homes?",
+      "score": 83,
+      "served_by": "rag",
+      "missing": [
+        "Residential and bilingual Deaf schools are where many Deaf people first encounter fluent language and a cultural home"
+      ],
+      "errors": [],
+      "answer_preview": "The vault snippets support the idea that early exposure to sign language is crucial for a child's language development, particularly in preventing language deprivation and promoting bilingual-bimodal ",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "answer_seconds": 19.376,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.02585057499982213,
+        "subq": 0,
+        "dense": 0.05404407300011371,
+        "mode": "hybrid",
+        "expand": 4.1279000015492784e-05,
+        "ttft": 6.3805371280000145,
+        "phase1": 19.2936427059999,
+        "prompt_eval_count": 3556,
+        "eval_count": 279,
+        "total_duration": 19284483588,
+        "total": 19.375721911000255
+      }
+    },
+    {
+      "id": "interpreting_access_1",
+      "question": "My company always books a sign language interpreter whenever our deaf employee has a meeting, so isn't the workplace already fully accessible to him?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The World Federation of the Deaf emphasizes that signing avatars cannot substitute for qualified human signers. According to the WFD-WASLI Statement (2018), \"These computerised products do not surpass",
+      "n_sources": 9,
+      "sources": [
+        "Organizations/World Federation of the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Pediatric Audiology DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/State Deaf Offices DC Maryland.md",
+        "LanguageDeprivationAgent/00 Agent Home.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Concepts/Signing Avatars.md",
+        "Concepts/CRPD.md",
+        "CRPD/Article 2 Definitions.md",
+        "CRPD/Article 21 Freedom of Expression.md"
+      ],
+      "answer_seconds": 22.344,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.0177517839997563,
+        "subq": 0,
+        "dense": 0.15198835299997882,
+        "mode": "hybrid",
+        "expand": 7.702299990341999e-05,
+        "ttft": 7.503409693999856,
+        "phase1": 22.171987417999844,
+        "prompt_eval_count": 4009,
+        "eval_count": 315,
+        "total_duration": 22169312023,
+        "total": 22.34428611999965
+      }
+    },
+    {
+      "id": "interpreting_access_2",
+      "question": "My daughter is deaf and I want her school to truly do right by her, so what does genuine communication access look like beyond just assigning someone to sign for her?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "Genuine communication access goes beyond just assigning someone to sign for your child. According to the Frederick County Public Schools' Sign Language Interpreting Services, this includes having a de",
+      "n_sources": 7,
+      "sources": [
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help DC and Maryland Local Services.md",
+        "Concepts/IFSP and Part C Early Intervention.md",
+        "Concepts/EHDI Early Hearing Detection and Intervention.md"
+      ],
+      "answer_seconds": 29.192,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.01780087099996308,
+        "subq": 0,
+        "dense": 0.04534919900015666,
+        "mode": "hybrid",
+        "expand": 4.399899989948608e-05,
+        "ttft": 6.363316294000015,
+        "phase1": 29.12665489300025,
+        "prompt_eval_count": 3448,
+        "eval_count": 466,
+        "total_duration": 29124161030,
+        "total": 29.192300138000064
+      }
+    },
+    {
+      "id": "deaf_identity_audism_1",
+      "question": "Our audiologist keeps measuring my daughter's hearing levels, but a teacher of the deaf told us there's also a whole community-and-identity side to being deaf. How is belonging to that community actually different from just not being able to hear well?",
+      "score": 100,
+      "served_by": "rag",
+      "missing": [],
+      "errors": [],
+      "answer_preview": "The concept of Deaf culture and its significance in shaping identity and community cannot be fully captured by simply stating that it is about not being able to hear well. According to scholars such a",
+      "n_sources": 8,
+      "sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "Concepts/Deaf Epistemology.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "Concepts/IFSP and Part C Early Intervention.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md"
+      ],
+      "answer_seconds": 24.398,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.024490029999924445,
+        "subq": 0,
+        "dense": 0.068267232999915,
+        "mode": "hybrid",
+        "expand": 4.0670999624126125e-05,
+        "ttft": 6.574031888999798,
+        "phase1": 24.30322212100009,
+        "prompt_eval_count": 3417,
+        "eval_count": 376,
+        "total_duration": 24300906173,
+        "total": 24.39814647000003
+      }
+    },
+    {
+      "id": "deaf_identity_audism_2",
+      "question": "People keep using the word 'audism' and honestly it sounds like a made-up buzzword to me. Where did it even come from, and isn't wanting a deaf kid to learn to hear and talk just normal parenting rather than some kind of prejudice?",
+      "score": 83,
+      "served_by": "rag",
+      "missing": [
+        "Audism is a real term coined by Deaf scholar Tom Humphries"
+      ],
+      "errors": [],
+      "answer_preview": "The term \"audism\" originates from Deaf culture and has been used by scholars such as H-Dirksen L. Bauman and Harlan Lane in their work on Deaf studies. Audism refers to the assumption that hearing is ",
+      "n_sources": 10,
+      "sources": [
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/Language Deprivation/Gulati 2018 - Language Deprivation Syndrome.md",
+        "Sources/Sign Language AI and Ethics/Angelini Spiel De Meulder 2024 - Experiencing DeafTech.md",
+        "Sources/Grosjean 2001 - The Right of the Deaf Child to Grow Up Bilingual.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Parent Support Organizations DC Maryland.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "CRPD/Article 9 Accessibility.md",
+        "CRPD/Article 21 Freedom of Expression.md",
+        "Organizations/Gallaudet University.md"
+      ],
+      "answer_seconds": 17.332,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.04826106800010166,
+        "subq": 2,
+        "dense": 0.048276875000283326,
+        "mode": "hybrid+subq",
+        "expand": 3.859100024783402e-05,
+        "ttft": 8.768291733999831,
+        "phase1": 17.232646207000016,
+        "prompt_eval_count": 4534,
+        "eval_count": 204,
+        "total_duration": 17226755718,
+        "total": 17.331974517999697
+      }
+    },
+    {
+      "id": "deaf_world_visual_1",
+      "question": "Some Deaf adults told me that they 'take in the world through their eyes' and belong to their own group with its own way of life, but honestly, isn't that just putting a positive spin on not being able to hear?",
+      "score": 83,
+      "served_by": "rag",
+      "missing": [
+        "Scholars Ben Bahan, Harlan Lane, and Robert Hoffmeister describe this community and its visual life in 'A Journey into the DEAF-WORLD'"
+      ],
+      "errors": [],
+      "answer_preview": "The concept of \"Deaf Gain\" reframes deafness as a form of human diversity that yields distinct cognitive, creative, cultural, and linguistic contributions. This perspective inverts the clinical vocabu",
+      "n_sources": 6,
+      "sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "Concepts/Deaf Gain.md",
+        "Sources/Sign Language AI and Ethics/Atwell et al 2025 - Nothing About Us Without Us.md",
+        "Concepts/IFSP and Part C Early Intervention.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md"
+      ],
+      "answer_seconds": 23.77,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.02089027200008786,
+        "subq": 0,
+        "dense": 0.08988600000020597,
+        "mode": "hybrid",
+        "expand": 4.5214999772724696e-05,
+        "ttft": 6.634759136999946,
+        "phase1": 23.65663877299994,
+        "prompt_eval_count": 3139,
+        "eval_count": 366,
+        "total_duration": 23654319114,
+        "total": 23.76993665100008
+      }
+    },
+    {
+      "id": "deaf_world_visual_2",
+      "question": "I'm a teacher who just started working with a Deaf student, and I want to understand what people mean when they call the Deaf community its own people with an experience of life centered on sight, and how their language reflects that. Can you explain?",
+      "score": 86,
+      "served_by": "rag",
+      "missing": [
+        "Deaf storytelling is rich in classifiers and role-shift"
+      ],
+      "errors": [],
+      "answer_preview": "The Deaf community refers to a linguistic-cultural community with its own distinct culture, history, literature, arts, norms, and institutions (Padden & Humphries 1988). This community is characterize",
+      "n_sources": 11,
+      "sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Organizations/National Deaf Center.md",
+        "Sources/Sign Language AI and Ethics/Atwell et al 2025 - Nothing About Us Without Us.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Researchers FAQ.md",
+        "CRPD/Article 24 Education.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "Sources/Deaf Education History/Ballard 2025 - Unmasking Deaf Education Documentary.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "answer_seconds": 42.042,
+      "timing": {
+        "persona": "default",
+        "bm25": 0.04785006899965083,
+        "subq": 3,
+        "dense": 0.04985642299971005,
+        "mode": "hybrid+subq",
+        "expand": 4.447900028026197e-05,
+        "ttft": 8.680333169999813,
+        "phase1": 41.942131926,
+        "prompt_eval_count": 4722,
+        "eval_count": 640,
+        "total_duration": 41935305043,
+        "total": 42.04227541699993
+      }
+    }
+  ],
+  "gaps": [
+    {
+      "id": "language_deprivation_1",
+      "fact": "Providing ASL from birth lets the brain acquire language during the early developmental window it is built for",
+      "terms": [
+        "acquire",
+        "providing",
+        "window",
+        "let"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "language_deprivation_1",
+      "fact": "Wyatte Hall frames early language deprivation as a preventable public-health problem rather than a personal or parental failing",
+      "terms": [
+        "failing",
+        "preventable",
+        "parental",
+        "personal"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "asl_full_language_2",
+      "fact": "Stokoe (1960) identified the building-block parameters of signs (handshape, location, movement), and Robbin Battison later added palm orientation as a fourth parameter",
+      "terms": [
+        "palm",
+        "1960",
+        "parameter",
+        "parameter"
+      ],
+      "chunks": 1
+    },
+    {
+      "id": "deaf_gain_2",
+      "fact": "The term was developed and theorized by H-Dirksen Bauman and Joseph Murray",
+      "terms": [
+        "theorized",
+        "dirksen",
+        "bauman",
+        "h"
+      ],
+      "chunks": 1
+    },
+    {
+      "id": "crpd_language_rights_2",
+      "fact": "Article 24 calls for Deaf adult role models and environments that support the child's language and identity",
+      "terms": [
+        "role",
+        "identity",
+        "call",
+        "environment"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "legal_recognition_1",
+      "fact": "Meaningful recognition attaches actual rights and resources such as access to education, interpreting, and public services in sign, not just words",
+      "terms": [
+        "attache",
+        "actual",
+        "meaningful",
+        "interpreting"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "gallaudet_1",
+      "fact": "It refers to Gallaudet University, located in Washington, D.C.",
+      "terms": [
+        "located",
+        "refer",
+        "washington"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "gallaudet_1",
+      "fact": "It was established in 1864 through a federal charter",
+      "terms": [
+        "1864",
+        "charter",
+        "established",
+        "federal"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "gallaudet_1",
+      "fact": "It is the only university in the world built from the start for deaf and hard-of-hearing students",
+      "terms": [
+        "built",
+        "start",
+        "student"
+      ],
+      "chunks": 1
+    },
+    {
+      "id": "gallaudet_1",
+      "fact": "The institution produces Deaf scholars, educators, leaders, and researchers who sustain the community's knowledge",
+      "terms": [
+        "sustain",
+        "leader",
+        "educator",
+        "knowledge"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "gallaudet_2",
+      "fact": "The school in question, Gallaudet University in Washington, D.C., is the world's only university designed specifically around deaf and hard-of-hearing students",
+      "terms": [
+        "specifically",
+        "around",
+        "designed",
+        "washington"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "gallaudet_2",
+      "fact": "On this campus being Deaf is the norm and accommodation is built in, not treated as a special exception",
+      "terms": [
+        "exception",
+        "treated",
+        "campus",
+        "being"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "gallaudet_2",
+      "fact": "The 1988 Deaf President Now protest, in which students halted the campus until a Deaf president (I. King Jordan) was appointed, is a landmark in Deaf civil rights and self-determination",
+      "terms": [
+        "halted",
+        "protest",
+        "king",
+        "jordan"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "maryland_school_deaf_1",
+      "fact": "The Maryland School for the Deaf (MSD) runs two campuses, in Frederick and Columbia, Maryland.",
+      "terms": [
+        "campuse",
+        "columbia",
+        "frederick",
+        "msd"
+      ],
+      "chunks": 11
+    },
+    {
+      "id": "maryland_school_deaf_2",
+      "fact": "MSD's Frederick and Columbia campuses provide an environment where language is never a barrier because everyone signs.",
+      "terms": [
+        "everyone",
+        "campuse",
+        "barrier",
+        "never"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "deaf_community_transmission_2",
+      "fact": "Residential and bilingual Deaf schools are where many Deaf people first encounter fluent language and a cultural home",
+      "terms": [
+        "encounter",
+        "residential",
+        "many",
+        "fluent"
+      ],
+      "chunks": 0
+    },
+    {
+      "id": "deaf_identity_audism_2",
+      "fact": "Audism is a real term coined by Deaf scholar Tom Humphries",
+      "terms": [
+        "coined",
+        "tom",
+        "audism",
+        "humphry"
+      ],
+      "chunks": 2
+    },
+    {
+      "id": "deaf_world_visual_1",
+      "fact": "Scholars Ben Bahan, Harlan Lane, and Robert Hoffmeister describe this community and its visual life in 'A Journey into the DEAF-WORLD'",
+      "terms": [
+        "harlan",
+        "robert",
+        "journey",
+        "bahan"
+      ],
+      "chunks": 4
+    },
+    {
+      "id": "deaf_world_visual_2",
+      "fact": "Deaf storytelling is rich in classifiers and role-shift",
+      "terms": [
+        "classifier",
+        "storytelling",
+        "rich",
+        "shift"
+      ],
+      "chunks": 0
+    }
+  ],
+  "passed": 15,
+  "failed": 13,
+  "judge_failures": 0,
+  "lowest": 43,
+  "all_pass": false,
+  "elapsed_seconds": 1741.81
+}

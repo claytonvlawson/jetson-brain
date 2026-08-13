@@ -1,0 +1,313 @@
+{
+  "fingerprint": {
+    "index": "index-mac/bm25.pkl",
+    "chunks": 1540,
+    "tokenizer_version": null,
+    "embed_prefix_version": null,
+    "dense_model": "nomic-embed-text",
+    "dense_dim": 768,
+    "dense_rows": 0,
+    "BRAIN_HYBRID": "1",
+    "BRAIN_DECOMPOSE": "1",
+    "BRAIN_ANN": "0",
+    "BRAIN_OBSIDIAN_RANK": "0",
+    "BRAIN_AUTOLEARN": "0"
+  },
+  "aggregate": {
+    "n": 12,
+    "in_context": 12,
+    "in_context_pct": 100.0,
+    "mrr": 0.9375,
+    "found_anywhere": 12,
+    "median_rank": 1,
+    "recall@1": 11,
+    "recall@3": 11,
+    "recall@5": 12,
+    "recall@8": 12,
+    "recall@10": 12,
+    "recall@20": 12
+  },
+  "skipped": [],
+  "results": [
+    {
+      "id": "gallaudet_location",
+      "question": "Where is Gallaudet University?",
+      "expect_sources": [
+        "Organizations/Gallaudet University.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 24.15,
+      "retrieved_sources": [
+        "Organizations/Gallaudet University.md",
+        "Organizations/Gallaudet University.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "Organizations/Center for Black Deaf Studies.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md"
+      ],
+      "seconds": 1.15
+    },
+    {
+      "id": "gallaudet_founded",
+      "question": "What year was Gallaudet University founded?",
+      "expect_sources": [
+        "Organizations/Gallaudet University.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "analytic",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 20.72,
+      "retrieved_sources": [
+        "Organizations/Gallaudet University.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "Concepts/Black ASL.md",
+        "Organizations/Gallaudet University.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md"
+      ],
+      "seconds": 0.106
+    },
+    {
+      "id": "wfd_hq",
+      "question": "Where is the World Federation of the Deaf headquartered?",
+      "expect_sources": [
+        "Organizations/World Federation of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 29.3,
+      "retrieved_sources": [
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Deaf Community Organizations DMV.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/World Federation of the Deaf.md"
+      ],
+      "seconds": 0.146
+    },
+    {
+      "id": "wfd_founded",
+      "question": "When was the World Federation of the Deaf founded?",
+      "expect_sources": [
+        "Organizations/World Federation of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 43.29,
+      "retrieved_sources": [
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Sources/WFD 2023 - Declaration on Rights of Deaf Children Jeju.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/National Black Deaf Advocates.md"
+      ],
+      "seconds": 0.152
+    },
+    {
+      "id": "eud_hq",
+      "question": "Where is the European Union of the Deaf based?",
+      "expect_sources": [
+        "Organizations/European Union of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 44.18,
+      "retrieved_sources": [
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/Organizations Home.md",
+        "Sources/Sign Language AI and Ethics/EUD 2025 - Ethical Framework on AI and Sign Language.md"
+      ],
+      "seconds": 0.168
+    },
+    {
+      "id": "eud_founded",
+      "question": "When was the European Union of the Deaf founded?",
+      "expect_sources": [
+        "Organizations/European Union of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 54.58,
+      "retrieved_sources": [
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/World Federation of the Deaf.md"
+      ],
+      "seconds": 0.101
+    },
+    {
+      "id": "nad_founded",
+      "question": "When was the National Association of the Deaf founded?",
+      "expect_sources": [
+        "Organizations/National Association of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 46.59,
+      "retrieved_sources": [
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "Organizations/AG Bell Association.md",
+        "Organizations/European Union of the Deaf.md"
+      ],
+      "seconds": 0.135
+    },
+    {
+      "id": "msd_founded",
+      "question": "What year did the Maryland School for the Deaf open, and in what city?",
+      "expect_sources": [
+        "Organizations/Maryland School for the Deaf.md"
+      ],
+      "rank": 4,
+      "in_context": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+subq",
+      "n_subq": 2,
+      "top_score": 21.15,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help DC and Maryland Local Services.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md"
+      ],
+      "seconds": 0.105
+    },
+    {
+      "id": "nbda_founded",
+      "question": "When was National Black Deaf Advocates founded?",
+      "expect_sources": [
+        "Organizations/National Black Deaf Advocates.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 70.39,
+      "retrieved_sources": [
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/National Black Deaf Advocates.md"
+      ],
+      "seconds": 0.076
+    },
+    {
+      "id": "ndc_location",
+      "question": "Where is the National Deaf Center based?",
+      "expect_sources": [
+        "Organizations/National Deaf Center.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 36.68,
+      "retrieved_sources": [
+        "Organizations/National Deaf Center.md",
+        "Organizations/National Deaf Center.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "Organizations/National Deaf Center.md",
+        "Organizations/National Deaf Center.md"
+      ],
+      "seconds": 0.096
+    },
+    {
+      "id": "clerc_location",
+      "question": "Where is the Laurent Clerc National Deaf Education Center located?",
+      "expect_sources": [
+        "Organizations/Laurent Clerc National Deaf Education Center.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+subq",
+      "n_subq": 2,
+      "top_score": 77.23,
+      "retrieved_sources": [
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Organizations/National Deaf Center.md",
+        "Organizations/National Deaf Center.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md"
+      ],
+      "seconds": 0.104
+    },
+    {
+      "id": "legal_recognition_author",
+      "question": "Who wrote The Legal Recognition of Sign Languages?",
+      "expect_sources": [
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "keep_k": 6,
+      "intent": "factual_short",
+      "mode": "hybrid",
+      "n_subq": 0,
+      "top_score": 34.21,
+      "retrieved_sources": [
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Concepts/Sign Language Recognition.md",
+        "Thesis/Literature Review - Ethical Ownership of SLR Databases (Draft).md",
+        "Concepts/Sign Language Recognition.md",
+        "Concepts/Deaf Digital Law.md"
+      ],
+      "seconds": 0.095
+    }
+  ]
+}
