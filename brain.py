@@ -87,6 +87,18 @@ try:
 except (KeyError, ValueError):
     pass
 
+# BRAIN_SEED pins the sampler. Temperature alone does NOT make a run
+# reproducible at the default 0.2, so two arms of an A/B differed by the change
+# under test AND by sampling, and a 1-2 question swing could not be told from
+# noise. With a seed, an unchanged arm re-run must reproduce exactly -- which is
+# also the cheapest way to prove the harness itself is stable. Unset in
+# production: pinning the seed there would freeze every retry into the same
+# wording, including a bad one.
+try:
+    GEN_OPTIONS["seed"] = int(os.environ["BRAIN_SEED"])
+except (KeyError, ValueError):
+    pass
+
 # keep_alive per tier (8GB cannot hold both large models resident): the fast
 # model stays pinned (-1) for warm repeats; the deep 7B loads on demand and is
 # released a couple minutes after use so it never fights the fast model for VRAM.
@@ -520,7 +532,27 @@ _CLAUSE_SPLIT_RE = re.compile(
     r"\?|;|,\s+and\b|\s+and\s+(?=(?:in\s+|for\s+|by\s+|at\s+)?"
     r"(?:what|who|whom|whose|when|where|which|how|why)\b)|\s+and then\b")
 
-DECOMPOSE_ENABLED = os.environ.get("BRAIN_DECOMPOSE", "1") != "0"
+# DEFAULT OFF as of the 3B optimization pass. Decomposition was on by
+# construction, never measured against its own absence, and it COSTS
+# retrieval. Measured on all 40 retrieval_gold labels, twice, on two
+# independently built indexes:
+#
+#   index      arm          in_context   MRR      recall@20
+#   1540-chunk DECOMPOSE=1  28/40        0.6135   36
+#   1540-chunk DECOMPOSE=0  30/40        0.6406   37
+#   1545-chunk DECOMPOSE=1  29/40        0.6164   37
+#   1545-chunk DECOMPOSE=0  31/40        0.6437   38
+#
+# Same direction in the BM25-only arms too. Per question on the current index
+# it recovers deaf_identity_audism_2 (rank 9 -> 2), deaf_world_visual_2
+# (12 -> 3), asl_full_language_2 (34 -> 8), bilingual_bimodal_2 (19 -> 9),
+# msd_founded (4 -> 1) and language_deprivation_2 (5 -> 4); the only loss is
+# deaf_gain_1 (1 -> 2), which stays in context. The mechanism: each sub-query
+# is its own RRF ranker, so a question that decomposes into three clauses
+# dilutes the full question's ranking with two narrower ones, and the note
+# that answers the WHOLE question ranks below notes that answer a fragment.
+# BRAIN_DECOMPOSE=1 restores it.
+DECOMPOSE_ENABLED = os.environ.get("BRAIN_DECOMPOSE", "0") != "0"
 # Counted AFTER stopword stripping, so this is lower than a raw word count
 # suggests: "Who founded Gallaudet University and in what year, and what law
 # made it possible?" is 15 words but only 7 content tokens.

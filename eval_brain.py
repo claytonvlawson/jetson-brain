@@ -190,13 +190,57 @@ JUDGE_TEMPLATE = (
 VIOLATION_PENALTY = 25   # points docked per must-not claim the answer actually asserts
 
 
+# The judge must see the WHOLE answer it is grading. brain.py answers at
+# num_ctx 6144 with num_predict 640, so a judge posted at 4096 silently drops
+# the head of its own prompt -- the system prompt and the first facts of the
+# checklist -- and grades a truncated view. Worse, no num_predict meant the
+# verdict inherited Ollama's default 128 tokens, so a long MUST-COVER list got
+# cut mid-JSON and parsed as a judge failure. Both defects punish LONG answers
+# specifically, which is exactly what a run that got slower and more verbose
+# produces: the harness would report a quality regression that is really its
+# own truncation. Match the answerer's window; give the verdict room to close.
+JUDGE_NUM_CTX = 6144
+JUDGE_NUM_PREDICT = 512
+
+
+# Every JudgeTransportError raised during a battery lands here, so a run that
+# limped through a dead Ollama says so in its own report instead of looking
+# like a quality result. `first` keeps the earliest message: the later ones are
+# usually the same cause repeated once per retry.
+TRANSPORT_ERRORS = {"count": 0, "first": None}
+
+
+def _note_transport_error(exc):
+    TRANSPORT_ERRORS["count"] += 1
+    if TRANSPORT_ERRORS["first"] is None:
+        TRANSPORT_ERRORS["first"] = str(exc)
+
+
+class JudgeTransportError(Exception):
+    """The judge could not be reached or did not return parseable transport
+    payload. Distinct from a judge that answered with a bad verdict: this one
+    means the measurement itself is void, not that the answer scored badly."""
+
+
 def _ollama_chat(model, messages, host, want_json, timeout):
-    """POST /api/chat to Ollama with urllib. Returns content str or None."""
+    """POST /api/chat to Ollama with urllib. Returns content str.
+
+    Raises JudgeTransportError when Ollama is unreachable, the model is
+    missing, or the response is not JSON. The previous bare
+    `except Exception: return None` collapsed a dead Ollama, a 404 model, an
+    OOM kill mid-generation and a malformed body into one indistinguishable
+    None, which is how a battery with visibly correct answers was recorded as
+    a clean zero. Callers that want the old tolerant behavior should catch
+    JudgeTransportError explicitly and decide what it means."""
     body = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": 0.0, "num_ctx": 4096},
+        "options": {
+            "temperature": 0.0,
+            "num_ctx": JUDGE_NUM_CTX,
+            "num_predict": JUDGE_NUM_PREDICT,
+        },
     }
     if want_json:
         body["format"] = "json"
@@ -207,10 +251,24 @@ def _ollama_chat(model, messages, host, want_json, timeout):
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        return ((payload.get("message") or {}).get("content")) or ""
-    except Exception:
-        return None
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            pass
+        raise JudgeTransportError(
+            "judge HTTP %s from %s: %s" % (e.code, host, detail)) from e
+    except Exception as e:
+        raise JudgeTransportError(
+            "judge unreachable at %s: %r" % (host, e)) from e
+    try:
+        payload = json.loads(raw)
+    except Exception as e:
+        raise JudgeTransportError(
+            "judge returned non-JSON (%d bytes): %.200r" % (len(raw), raw)) from e
+    return ((payload.get("message") or {}).get("content")) or ""
 
 
 def _extract_json(text):
@@ -247,7 +305,11 @@ def _judge_once(prompt, judge_model, host, retries, timeout):
         {"role": "user", "content": prompt},
     ]
     for _attempt in range(max(1, retries)):
-        content = _ollama_chat(judge_model, messages, host, True, timeout)
+        try:
+            content = _ollama_chat(judge_model, messages, host, True, timeout)
+        except JudgeTransportError as e:
+            _note_transport_error(e)
+            continue
         obj = _extract_json(content)
         if not isinstance(obj, dict):
             continue
@@ -315,7 +377,11 @@ def _iso_bool(template, key, filler, judge_model, host, retries, timeout, defaul
         {"role": "user", "content": prompt},
     ]
     for _attempt in range(max(1, retries)):
-        content = _ollama_chat(judge_model, messages, host, True, timeout)
+        try:
+            content = _ollama_chat(judge_model, messages, host, True, timeout)
+        except JudgeTransportError as e:
+            _note_transport_error(e)
+            continue
         obj = _extract_json(content)
         if isinstance(obj, dict) and key in obj:
             ISO_CALLS["ok"] += 1
@@ -475,12 +541,20 @@ def load_gold(path):
 
 
 def preflight_judge(judge_model, host, timeout):
-    """Confirm the judge model answers at all. Returns True/False."""
-    reply = _ollama_chat(
-        judge_model,
-        [{"role": "user", "content": "Reply with the single word: ready"}],
-        host, False, timeout,
-    )
+    """Confirm the judge model answers at all. Returns True/False.
+
+    Prints the transport reason on failure. The old version could only say
+    "no reply", so a missing model, a stopped Ollama and a timeout all looked
+    the same at the one moment the run could still be fixed cheaply."""
+    try:
+        reply = _ollama_chat(
+            judge_model,
+            [{"role": "user", "content": "Reply with the single word: ready"}],
+            host, False, timeout,
+        )
+    except JudgeTransportError as e:
+        sys.stderr.write("judge preflight failed: %s\n" % e)
+        return False
     return bool(reply and reply.strip())
 
 
@@ -574,6 +648,20 @@ def build_parser():
     p.add_argument("--batch", dest="isolate", action="store_false",
                    help="use the batched majority-vote judge (--judge-votes) instead of per-fact isolation")
     p.set_defaults(isolate=True)
+    # A question served from the answer cache or the semantic router is graded
+    # exactly like a retrieved one, and nothing ever failed the run over it.
+    # That is how a discredited "28/28" was produced: 100% cache hits, the
+    # retrieval pipeline never executed. Provenance is now enforced by default,
+    # and the configuration is rejected BEFORE answering rather than after the
+    # 900s the battery takes to discover it.
+    p.add_argument("--require-rag", dest="require_rag", action="store_true",
+                   help="fail unless every answer is served by retrieval (DEFAULT)")
+    p.add_argument("--allow-cache-hits", dest="require_rag", action="store_false",
+                   help="permit cache/semantic-served answers to be graded")
+    p.set_defaults(require_rag=True)
+    p.add_argument("--answers-out", default=None, metavar="PATH",
+                   help="write the answers as JSONL so a re-grade never has to "
+                        "re-generate (a judged battery costs ~900-1700s)")
     p.add_argument("--timeout", type=int, default=180, help="per-call timeout seconds")
     p.add_argument("--dry-run", action="store_true", help="list the plan, grade nothing")
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON report")
@@ -630,6 +718,24 @@ def main():
             "(expected at " + getattr(brain, "INDEX_PATH", "index/bm25.pkl") + ")\n")
         return 4
 
+    # Provenance gate, checked HERE -- before a single question is answered --
+    # because the failure it prevents is a whole battery whose numbers describe
+    # the cache rather than the system.
+    if args.require_rag:
+        offenders = []
+        if not args.no_cache:
+            offenders.append("the answer cache is enabled (pass --no-cache)")
+        if semantic is not None:
+            offenders.append("the semantic router is enabled (drop --semantic)")
+        if offenders:
+            sys.stderr.write(
+                "--require-rag is on (the default) but " + " and ".join(offenders)
+                + ".\n  Answers could be served without ever running retrieval, "
+                "which is how a\n  100%-cache-hit run was once recorded as a "
+                "perfect score. Fix the flags,\n  or pass --allow-cache-hits to "
+                "grade cache-served answers on purpose.\n")
+            return 4
+
     # Confirm the judge is reachable before spending time answering.
     if not preflight_judge(args.judge_model, args.host, min(60, args.timeout)):
         sys.stderr.write(
@@ -650,6 +756,10 @@ def main():
             args.judge_model, args.host, args.retries, args.timeout, args.judge_votes)
 
     results = []
+    # Full answer text, kept separately because results[] stores only a 200-char
+    # preview. This is what --answers-out writes so a judge change can be
+    # re-scored against the SAME answers instead of regenerating them.
+    answers_log = []
     if args.two_phase:
         # Phase 1: answer everything (answerer model stays resident), then Phase 2:
         # judge everything (judge model stays resident). One model load per phase
@@ -680,6 +790,10 @@ def main():
                 "answer_seconds": round(ask_s, 3),
                 "timing": timing,
             })
+            answers_log.append({
+                "id": g["id"], "question": g["question"], "answer": answer or "",
+                "sources": list(sources or []), "served_by": served_by,
+            })
             if not args.as_json:
                 tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
                 print("  judged [%2d/%2d] %-6s %4s  %s" % (
@@ -700,6 +814,10 @@ def main():
                 "answer_seconds": round(ask_s, 3),
                 "timing": timing,
             })
+            answers_log.append({
+                "id": g["id"], "question": g["question"], "answer": answer or "",
+                "sources": list(sources or []), "served_by": served_by,
+            })
             if not args.as_json:
                 tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
                 print("  [%2d/%2d] %-6s %4s  %s" % (
@@ -707,6 +825,34 @@ def main():
 
     elapsed = time.time() - start
     failed = [r for r in results if r["score"] < args.threshold]
+
+    # Write answers BEFORE any early return below, so an expensive battery that
+    # trips a guard is still re-gradable without regenerating it.
+    if args.answers_out:
+        try:
+            with open(args.answers_out, "w", encoding="utf-8") as fh:
+                for row in answers_log:
+                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            if not args.as_json:
+                print("wrote %d answer(s) to %s" % (len(answers_log), args.answers_out))
+        except Exception as e:
+            sys.stderr.write("could not write --answers-out: " + repr(e) + "\n")
+
+    # The configuration gate above rejects flags that PERMIT a cache hit; this
+    # one catches an answer that actually came from somewhere other than
+    # retrieval, whatever the flags claimed.
+    if args.require_rag:
+        non_rag = [r for r in results if r.get("served_by") != "rag"]
+        if non_rag:
+            sys.stderr.write(
+                "PROVENANCE FAILURE: %d of %d answers were not served by retrieval.\n"
+                % (len(non_rag), len(results)))
+            for r in non_rag[:10]:
+                sys.stderr.write("  %-30s served_by=%s\n" % (r["id"], r.get("served_by")))
+            sys.stderr.write(
+                "  These scores do not measure the retrieval pipeline. Pass "
+                "--allow-cache-hits to grade them anyway.\n")
+            return 4
 
     gaps = report_gaps(results, the_brain) if args.report_gaps else []
     if gaps and not args.as_json:
@@ -753,10 +899,28 @@ def main():
     total_iso = ISO_CALLS["ok"] + ISO_CALLS["failed"]
     if total_iso and ISO_CALLS["failed"] > total_iso / 2:
         msg = ("JUDGE UNRELIABLE: %d of %d isolated judge calls failed. Scores in "
-               "this run are meaningless, not a system result.\n"
-               "  A 7B judge cannot load after answering pins llama3.2:3b "
-               "(KEEP_ALIVE_FAST=-1) on an 8GB board. Re-run with the default "
-               "judge (--judge-model %s)." % (ISO_CALLS["failed"], total_iso, args.model))
+               "this run are meaningless, not a system result."
+               % (ISO_CALLS["failed"], total_iso))
+        # Only suggest changing the judge when it is not ALREADY the default.
+        # The old text said "re-run with --judge-model llama3.2:3b" even on runs
+        # that were already using it, sending two sessions hunting a judge
+        # change that had nothing left to change. When the judge is already the
+        # default, the cause is transport, so print that instead.
+        if args.judge_model != DEFAULT_JUDGE:
+            msg += ("\n  A 7B judge cannot load after answering pins %s "
+                    "(KEEP_ALIVE_FAST=-1) on an 8GB board. Re-run with the "
+                    "default judge (--judge-model %s)."
+                    % (DEFAULT_MODEL, DEFAULT_JUDGE))
+        elif TRANSPORT_ERRORS["count"]:
+            msg += ("\n  Judge is already the default (%s), so this is not a "
+                    "model-swap problem. %d transport error(s); first: %s"
+                    % (DEFAULT_JUDGE, TRANSPORT_ERRORS["count"],
+                       TRANSPORT_ERRORS["first"]))
+        else:
+            msg += ("\n  Judge is already the default (%s) and no transport "
+                    "errors were recorded, so Ollama answered but the verdicts "
+                    "did not parse. Inspect the raw judge replies."
+                    % DEFAULT_JUDGE)
         print(msg, file=sys.stderr)
         return 4
 

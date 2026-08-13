@@ -175,6 +175,17 @@ check("a chunk with no score is never promoted",
 
 
 # -- decompose ---------------------------------------------------------------
+# BRAIN_DECOMPOSE now defaults OFF (it measured worse: in_context 31/40 vs
+# 29/40 on retrieval_gold, replicated on two indexes). These checks are about
+# the CORRECTNESS of decompose() when it is asked to run, so force the flag on
+# rather than depending on whichever way the default currently points -- the
+# original version depended on it, and silently became a no-op assertion the
+# moment the default flipped.
+check_true("decompose is OFF by default", not brain.DECOMPOSE_ENABLED,
+           "BRAIN_DECOMPOSE=%r" % (os.environ.get("BRAIN_DECOMPOSE"),))
+_saved_decompose = brain.DECOMPOSE_ENABLED
+brain.DECOMPOSE_ENABLED = True
+
 subqs = brain.decompose(multi_q)
 check_true("multi-clause decomposes", len(subqs) >= 2, "subqs=%r" % (subqs,))
 
@@ -204,6 +215,11 @@ for bad in (None, "", "and and and", "?"):
                    isinstance(brain.decompose(bad), list))
     except Exception as exc:
         FAILURES.append("decompose(%r) raised %r" % (bad, exc))
+
+# With the flag off, decompose must short-circuit to [] no matter the question.
+brain.DECOMPOSE_ENABLED = False
+check("decompose disabled returns []", brain.decompose(multi_q), [])
+brain.DECOMPOSE_ENABLED = _saved_decompose
 
 
 # -- _shape_for_intent -------------------------------------------------------
