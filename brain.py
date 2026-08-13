@@ -113,8 +113,42 @@ def _keep_alive(model):
 
 # Retrieval depth per tier: fast stays lean for speed, deep pulls more context
 # for grounding. handle_question does its own tiered retrieval inline.
-TOP_K_FAST = 6   # was 3, then 4 — deeper retrieval so more rubric facts are in context
+# TOP_K_FAST 6 -> 8. Measured on all 40 retrieval_gold labels: the binding
+# constraint was the WINDOW, not the ranking. 5 of the 9 misses were target
+# notes ranked 6, 6, 8, 8 and 9 -- ranked well, just outside the slots.
+#
+#   keep_k   in_context   assembled prompt (max)   questions over num_ctx 6144
+#     6       31/40        ~4,547 tok               0/28
+#     8       33/40        ~5,664 tok               0/28
+#    10       34/40        ~6,720 tok               1/28
+#    12       36/40        ~7,930 tok               8/28
+#
+# 8 is the largest window that still fits every gold question with headroom.
+# The 36/40 at 12 is not real: those prompts exceed num_ctx, and Ollama
+# truncates from the TOP, so the "retrieved" chunks that scored the win are
+# partly discarded along with the system prompt. Counting them would be
+# measuring the harness, not the system. fit_context() now guards the
+# remainder, so the failure is a trimmed tail rather than a dropped contract.
+TOP_K_FAST = 8   # was 3, then 4, then 6
 TOP_K_DEEP = 8   # was 6
+
+
+def _env_int(name, default, lo=1, hi=64):
+    """Env override for a retrieval-depth constant, clamped. These exist so the
+    window can be SWEPT by eval_retrieval.py (40s per arm, no judge) instead of
+    guessed: measurement showed 5 of the 9 retrieval misses were target notes
+    ranked just OUTSIDE the window (ranks 6, 6, 8, 8, 9 against keep_k 6 or 8),
+    not ranking failures at all. Clamped because a window wider than the 6144
+    context can hold silently truncates the prompt from the top, dropping the
+    system prompt -- a much worse failure than a miss."""
+    try:
+        return max(lo, min(hi, int(os.environ[name])))
+    except (KeyError, ValueError):
+        return default
+
+
+TOP_K_FAST = _env_int("BRAIN_TOP_K_FAST", TOP_K_FAST)
+TOP_K_DEEP = _env_int("BRAIN_TOP_K_DEEP", TOP_K_DEEP)
 
 # Retrieval section boost: when a query names a top-level vault folder
 # (e.g. "CRPD"), add this to the BM25 score of chunks in that folder so
@@ -144,12 +178,12 @@ _PARENT_SOURCE_PREFIXES = (
 # needs MSD and Clerc), so the fast tier gets deep-tier context, and no single
 # source note may fill more than PARENT_MAX_PER_SOURCE of the kept slots (the
 # boosted 64KB MSD note would otherwise crowd out every other source).
-PARENT_TOP_K = 8
+PARENT_TOP_K = _env_int("BRAIN_PARENT_TOP_K", 8)
 # 3, not 2: single-canonical-note questions (national orgs, finding mentors)
 # need three chunks of that one note, and the r2 eval showed a cap of 2
 # displacing exactly those (national_orgs 100 -> 50). With TOP_K 8 a cap of 3
 # still forces at least three distinct source notes into context.
-PARENT_MAX_PER_SOURCE = 3
+PARENT_MAX_PER_SOURCE = _env_int("BRAIN_PARENT_MAX_PER_SOURCE", 3)
 
 # Query-time semantic rerank of BM25 candidates. After BM25 + section boost, the
 # top hit is often a dense secondary note that merely repeats query words while
@@ -512,7 +546,7 @@ FACTUAL_MAX_TOKENS = 12
 # that already match the question, it does not compete with matching it.
 INTENT_BOOST_WEIGHT = 0.35
 
-MULTI_TOP_K = 8          # context slots for a multi-entity question
+MULTI_TOP_K = _env_int("BRAIN_MULTI_TOP_K", 8)   # context slots for a multi-entity question
 
 # Multiplier on a definition card when the question asks for a fact. Modest:
 # the card should win among its OWN note's chunks, not outrank other notes.
@@ -521,7 +555,7 @@ CARD_BOOST = 0.5
 # Max chunks from any one note for a multi-clause question. Tighter than the
 # parent cap (3): these questions name two or three entities outright, so 6
 # slots have to cover 3 notes.
-MULTI_MAX_PER_SOURCE = 2
+MULTI_MAX_PER_SOURCE = _env_int("BRAIN_MULTI_MAX_PER_SOURCE", 2)
 
 _WH_RE = re.compile(r"\b(how many|how much|where|when|who|whose|which|what|why|how)\b")
 
@@ -1238,6 +1272,24 @@ def _post_filter_rows(cand_rows, rows_idx, chunks, predicate):
     return out
 
 
+# prefix_version -> query-side prefix. Mirrors build_index.EMBED_PREFIXES, but
+# kept as a literal so brain.py never has to import the builder at query time.
+# An index whose prefix_version is missing or unrecognized is treated as "none",
+# which is what every index built before the option existed actually is.
+_QUERY_PREFIXES = {
+    "none": "",
+    "nomic-v1": "search_query: ",
+}
+
+
+def _query_prefix(dense_meta):
+    """Query-side task prefix for this index's dense block. Never raises."""
+    try:
+        return _QUERY_PREFIXES.get(dense_meta.get("prefix_version") or "none", "")
+    except Exception:
+        return ""
+
+
 def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
                   qvec_model=None):
     """Global embedding-cosine score per chunk INDEX for hybrid retrieval.
@@ -1260,10 +1312,18 @@ def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
     except Exception:
         return None
     try:
-        if qvec and qvec_model == dm["model"]:
+        # The index records the task-prefix scheme it was embedded under, so the
+        # query side follows the ARTIFACT rather than a local default. Querying
+        # a prefixed index without the prefix (or the reverse) does not fail
+        # loudly, it just retrieves worse, so the pairing must not be a thing
+        # anyone can set independently on the two sides.
+        qprefix = _query_prefix(dm)
+        if qvec and qvec_model == dm["model"] and not qprefix:
             qv = qvec
         else:
-            raw = _embed(question, OLLAMA_HOST, dm["model"], DENSE_TIMEOUT)
+            # A cached qvec from the router was embedded without a prefix, so it
+            # is not reusable against a prefixed index: re-embed instead.
+            raw = _embed(qprefix + question, OLLAMA_HOST, dm["model"], DENSE_TIMEOUT)
             if not raw:
                 return None
             qv = _normalize(raw)
@@ -1953,6 +2013,61 @@ def format_web_context(excerpts):
     return "\n\n".join(blocks)
 
 
+# Context budget. Nothing measured the assembled prompt against num_ctx before
+# this: on overflow Ollama truncates from the TOP, which drops the system prompt
+# and the highest-ranked vault snippets -- precisely the two things the
+# grounding contract depends on -- and the model then answers ungrounded with no
+# error anywhere. Widening the retrieval window makes that reachable, so the
+# guard ships with the wider window rather than after it.
+#
+# CHARS_PER_TOKEN is deliberately pessimistic. This vault's chunks average ~3.9
+# chars/token, but they are dense with proper nouns, wikilink syntax and heading
+# breadcrumbs that tokenize short, so assuming 3.4 leaves the estimate on the
+# safe side. The cost of overestimating is one dropped tail chunk; the cost of
+# underestimating is a silently ungrounded answer.
+CHARS_PER_TOKEN = 3.4
+# Leave room for the answer (num_predict) plus chat-template overhead, so the
+# guard trims before llama.cpp has to.
+CTX_RESERVE_TOKENS = 768
+CTX_FIT_ENABLED = os.environ.get("BRAIN_CTX_FIT", "1") not in ("0", "false", "False", "no")
+LAST_CTX_FIT = {}
+
+
+def _estimate_tokens(text):
+    return int(len(text or "") / CHARS_PER_TOKEN)
+
+
+def fit_context(question, chunks, system_prompt, linked_ids=None,
+                num_ctx=None, reserve=CTX_RESERVE_TOKENS):
+    """Drop the LOWEST-ranked chunks until the assembled prompt fits num_ctx.
+
+    Returns (kept_chunks, info). Trimming from the tail is the whole point: the
+    alternative is Ollama trimming from the head, which takes the system prompt
+    first. A ranked list that has to lose something should lose its weakest
+    member, not its contract.
+
+    Never drops below one chunk -- a question with no context at all should
+    reach the INSUFFICIENT path honestly, not be silently starved here."""
+    kept = list(chunks or [])
+    budget = (num_ctx if num_ctx is not None else GEN_OPTIONS.get("num_ctx", 6144)) - reserve
+    info = {"dropped": 0, "budget_tokens": budget,
+            "est_tokens": 0, "fit": True}
+    if not CTX_FIT_ENABLED or budget <= 0:
+        info["est_tokens"] = _estimate_tokens(
+            system_prompt + build_first_pass_user(question, kept, linked_ids))
+        return kept, info
+    while True:
+        est = _estimate_tokens(
+            (system_prompt or "")
+            + build_first_pass_user(question, kept, linked_ids))
+        info["est_tokens"] = est
+        if est <= budget or len(kept) <= 1:
+            info["fit"] = est <= budget
+            return kept, info
+        kept.pop()
+        info["dropped"] += 1
+
+
 def build_first_pass_user(question, chunks, linked_ids=None):
     parts = ["Vault context:\n" + format_vault_context(chunks, linked_ids)]
     parts.append("Question: " + question)
@@ -2364,7 +2479,10 @@ def _format_timing(tm):
                 "skills", "route", "web", "total"):
         if key in tm:
             parts.append("%s=%.3f" % (key, tm[key]))
-    for key in ("prompt_eval_count", "eval_count"):
+    # ctx_dropped is absent on a turn that fit, so it appears in the timing line
+    # ONLY when the budget guard actually trimmed something. A silent overflow
+    # was previously invisible; this makes trimming a thing you can grep for.
+    for key in ("prompt_eval_count", "eval_count", "ctx_dropped"):
         if key in tm:
             parts.append("%s=%d" % (key, tm[key]))
     return " ".join(parts)
@@ -2643,7 +2761,19 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     system_prompt = PARENT_SYSTEM if persona == "parent" else VAULT_FIRST_SYSTEM
     system_prompt = _shape_for_intent(system_prompt, intent)
     vault_messages = [{"role": "system", "content": system_prompt}]
-    vault_messages.extend(history[-PHASE1_HISTORY_MSGS:] if history else [])
+    _hist = history[-PHASE1_HISTORY_MSGS:] if history else []
+    vault_messages.extend(_hist)
+    # Fit BEFORE sending. The history is charged against the budget too, since
+    # it is part of the same prefill: a long session was the original way this
+    # overflowed. context_chunks here is post-link and post-obsidian expansion,
+    # so this is the real, final list.
+    _hist_text = "".join((m.get("content") or "") for m in _hist)
+    context_chunks, _fit = fit_context(
+        question, context_chunks, system_prompt + _hist_text, linked_ids)
+    LAST_CTX_FIT.clear()
+    LAST_CTX_FIT.update(_fit)
+    if _fit["dropped"]:
+        tm["ctx_dropped"] = _fit["dropped"]
     vault_messages.append(
         {"role": "user", "content": build_first_pass_user(
             question, context_chunks, linked_ids)}

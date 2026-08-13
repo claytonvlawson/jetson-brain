@@ -65,10 +65,30 @@ MAX_URLS_PER_NOTE = 20
 # or without numpy. The document embedding uses the chunk text verbatim (heading
 # breadcrumb included) with NO task prefix, to match brain.py's query embedding
 # and the existing rerank/router embed path exactly.
+#
+# nomic-embed-text is, however, trained ASYMMETRICALLY: documents are meant to
+# carry "search_document: " and queries "search_query: ", and dropping both
+# sides is a standing accuracy loss on every semantic query rather than a
+# neutral simplification. --embed-prefix builds an index that uses them.
+#
+# The prefix scheme is RECORDED IN THE INDEX as prefix_version, and brain.py
+# reads it back to choose the query prefix. That direction matters: the one
+# unrecoverable failure here is an index embedded one way and queried the
+# other, which does not crash -- it just quietly retrieves worse, exactly the
+# kind of defect this repo has been burned by before. Making the artifact
+# describe itself means the two sides cannot drift.
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 EMBED_DOC_CHARS = 2000    # truncate a very long chunk before embedding
 EMBED_TIMEOUT = 60        # generous: a cold model load on the Jetson is slow
+
+# prefix_version -> (document prefix, query prefix). "none" reproduces every
+# index built before this option existed.
+EMBED_PREFIXES = {
+    "none": ("", ""),
+    "nomic-v1": ("search_document: ", "search_query: "),
+}
+DEFAULT_EMBED_PREFIX = "none"
 
 
 def _load_embed_fns():
@@ -103,21 +123,26 @@ def _load_embed_fns():
         return _embed, _normalize
 
 
-def build_dense(chunks, model, host):
+def build_dense(chunks, model, host, prefix_version=DEFAULT_EMBED_PREFIX):
     # Embed every chunk once and return a dense block, or None if embedding is
     # not usable (Ollama down / model not pulled / mostly failing). Only
     # successfully-embedded chunks get a row; a chunk that fails to embed is
     # simply dense-invisible (BM25 still covers it), which keeps alignment
     # trivial and never blocks the build.
     embed, normalize = _load_embed_fns()
+    doc_prefix = EMBED_PREFIXES.get(prefix_version, EMBED_PREFIXES[DEFAULT_EMBED_PREFIX])[0]
     total = len(chunks)
     print("Embedding %d chunks with %s (this runs on the Jetson GPU) ..." % (total, model))
+    if doc_prefix:
+        print("  document prefix: %r (prefix_version=%s)" % (doc_prefix, prefix_version))
     ids = []
     flat = array.array("f")
     dim = None
     failures = 0
     for n, c in enumerate(chunks):
-        text = (c.get("text") or "")[:EMBED_DOC_CHARS]
+        # Truncate FIRST, then prefix, so the prefix is never the thing that
+        # gets cut and the document budget stays EMBED_DOC_CHARS either way.
+        text = doc_prefix + (c.get("text") or "")[:EMBED_DOC_CHARS]
         vec = embed(text, host, model, EMBED_TIMEOUT)
         if vec and dim is None:
             dim = len(vec)
@@ -140,7 +165,8 @@ def build_dense(chunks, model, host):
     if failures:
         print("NOTE: %d/%d chunks could not be embedded and are dense-invisible "
               "(BM25 still retrieves them)." % (failures, total))
-    return {"model": model, "dim": dim, "ids": ids, "buf": flat}
+    return {"model": model, "dim": dim, "ids": ids, "buf": flat,
+            "prefix_version": prefix_version}
 
 
 def _s_stem(w):
@@ -779,7 +805,8 @@ _JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv"}
 
 
 def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
-          ollama_host=DEFAULT_OLLAMA_HOST, meta="inline"):
+          ollama_host=DEFAULT_OLLAMA_HOST, meta="inline",
+          embed_prefix=DEFAULT_EMBED_PREFIX):
     if not os.path.isdir(vault):
         print("ERROR: vault directory not found: %s" % vault)
         return 1
@@ -916,7 +943,7 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
     # chunks exist) and only when --embed is passed. A None result (Ollama down
     # or mostly failing) leaves the index BM25-only and brain.py falls back to
     # its BM25+rerank path, so the build never hard-fails on the embedder.
-    dense = build_dense(chunks, embed_model, ollama_host) if embed else None
+    dense = build_dense(chunks, embed_model, ollama_host, embed_prefix) if embed else None
 
     # 'tokenized' is intentionally omitted: it is fully derivable from each
     # chunk's text via tokenize(), so storing it roughly doubled the pickle.
@@ -995,6 +1022,14 @@ def main():
                              "Must match brain.py's index dense model.")
     parser.add_argument("--ollama-host", default=DEFAULT_OLLAMA_HOST,
                         help="Ollama host for --embed (default %(default)s).")
+    parser.add_argument("--embed-prefix", choices=tuple(EMBED_PREFIXES), 
+                        default=DEFAULT_EMBED_PREFIX,
+                        help="task-prefix scheme for --embed. 'none' (default) "
+                             "embeds chunk text verbatim; 'nomic-v1' prepends "
+                             "'search_document: ' to documents and makes brain.py "
+                             "prepend 'search_query: ' to queries, which is what "
+                             "nomic-embed-text was trained on. Recorded in the "
+                             "index so the query side cannot drift from it.")
     parser.add_argument("--meta", choices=("none", "inline", "chunk"), default="inline",
                         help="How frontmatter metadata enters retrieval: none "
                              "(pre-A1 behavior), inline (append a metadata "
@@ -1003,7 +1038,7 @@ def main():
     args = parser.parse_args()
     return build(args.vault, args.out, embed=args.embed,
                  embed_model=args.embed_model, ollama_host=args.ollama_host,
-                 meta=args.meta)
+                 meta=args.meta, embed_prefix=args.embed_prefix)
 
 
 if __name__ == "__main__":
