@@ -95,6 +95,30 @@ def score_one(row, bm25, chunks, meta):
     keep_k = r["keep_k"]
     in_ctx = {norm(c.get("source")) for c in r["retrieved"]}
 
+    # Post-expansion in_context. retrieve_context() stops at keep_k, but
+    # _handle_question_impl keeps going: expand_with_links and (when
+    # BRAIN_OBSIDIAN_RANK is on) expand_with_obsidian_signal both run
+    # AFTER retrieval and add chunks the model actually sees, uncapped by
+    # keep_k. Scoring only r["retrieved"] is why the obsidian flags were
+    # historically invisible to this harness -- see env_fingerprint's
+    # BRAIN_OBSIDIAN_RANK/BLOCKS comments, now corrected. Mirrors
+    # brain.py:2864-2894 exactly so this harness measures what production
+    # sends to the model, not a second implementation of it.
+    # Upper bound, honestly: production runs fit_context() after this, which
+    # drops chunks from the TAIL until the prompt fits num_ctx - so a note that
+    # only arrived via expansion is exactly the kind that can still be clipped
+    # before the model sees it. in_context_expanded says "retrieval put it in
+    # reach", not "the model read it". Closing that last gap needs the token
+    # budget, which needs the system prompt and history this harness does not
+    # build; eval_brain.py is where that question gets settled.
+    added, _linked_ids = brain.expand_with_links(r["retrieved"], r["scores"], meta)
+    context_chunks = r["retrieved"] + added
+    if brain.OBSIDIAN_RANK_ENABLED:
+        obsidian_added = brain.expand_with_obsidian_signal(
+            r["retrieved"], context_chunks, meta)
+        context_chunks = context_chunks + obsidian_added
+    in_ctx_expanded = {norm(c.get("source")) for c in context_chunks}
+
     rank = None
     for i, src in enumerate(ranked, 1):
         if norm(src) in expect:
@@ -106,6 +130,7 @@ def score_one(row, bm25, chunks, meta):
         "expect_sources": row["expect_sources"],
         "rank": rank,
         "in_context": bool(expect & in_ctx),
+        "in_context_expanded": bool(expect & in_ctx_expanded),
         "keep_k": keep_k,
         "intent": r["intent"],
         "mode": r["mode"],
@@ -127,6 +152,9 @@ def aggregate(results):
         "in_context": sum(1 for r in results if r["in_context"]),
         "in_context_pct": round(
             100.0 * sum(1 for r in results if r["in_context"]) / n, 1),
+        "in_context_expanded": sum(1 for r in results if r["in_context_expanded"]),
+        "in_context_expanded_pct": round(
+            100.0 * sum(1 for r in results if r["in_context_expanded"]) / n, 1),
         "mrr": round(sum(1.0 / x for x in found) / n, 4),
         "found_anywhere": len(found),
         "median_rank": (sorted(found)[len(found) // 2] if found else None),
@@ -134,6 +162,12 @@ def aggregate(results):
     for k in KS:
         agg["recall@%d" % k] = sum(1 for x in found if x <= k)
     return agg
+
+
+def _flag(value):
+    """Render a brain.py boolean as the "1"/"0" the fingerprint has always used,
+    so artifacts stay comparable across the switch to reading brain directly."""
+    return "1" if value else "0"
 
 
 def env_fingerprint(meta, chunks):
@@ -150,24 +184,34 @@ def env_fingerprint(meta, chunks):
         "dense_model": dense.get("model"),
         "dense_dim": dense.get("dim"),
         "dense_rows": dense.get("n") or len(dense.get("rows_idx") or []),
-        "BRAIN_HYBRID": os.environ.get("BRAIN_HYBRID", "1"),
-        # Default "0" tracks brain.py: decomposition measured WORSE
-        # (in_context 31/40 vs 29/40) and was flipped off. A stale default here
-        # would mislabel every saved artifact's arm.
-        "BRAIN_DECOMPOSE": os.environ.get("BRAIN_DECOMPOSE", "0"),
+        # Arms are read back off the BRAIN MODULE, not re-derived from the
+        # environment with a default restated here. Restating them is how an
+        # artifact silently mislabels its own arm: brain.py's BRAIN_DECOMPOSE
+        # default flipped 1->0 and BRAIN_HYDE flipped 0->1, and any artifact
+        # saved against a hardcoded copy of the old default records an arm the
+        # run never actually used. brain's constants are resolved from the
+        # environment at import time, so these are what the code WILL DO --
+        # which is the only thing worth fingerprinting.
+        "BRAIN_HYBRID": _flag(brain.HYBRID_ENABLED),
+        "BRAIN_DECOMPOSE": _flag(brain.DECOMPOSE_ENABLED),
         # HyDE IS reachable from retrieve_context, unlike the obsidian flags,
         # so this arm genuinely moves the numbers below.
-        "BRAIN_HYDE": os.environ.get("BRAIN_HYDE", "0"),
-        "BRAIN_TOP_K_FAST": os.environ.get("BRAIN_TOP_K_FAST", "8"),
-        "BRAIN_ANN": os.environ.get("BRAIN_ANN", "0"),
-        "BRAIN_OBSIDIAN_RANK": os.environ.get("BRAIN_OBSIDIAN_RANK", "0"),
-        # Default "0" matches brain.py:249. Recorded for ATTRIBUTION only:
-        # neither obsidian flag is reachable from retrieve_context (the
-        # expansion runs in _handle_question_impl), so a blocks A/B cannot move
-        # a number this harness reports - but two runs must never emit
+        "BRAIN_HYDE": _flag(brain.HYDE_ENABLED),
+        "BRAIN_TOP_K_FAST": str(brain.TOP_K_FAST),
+        "BRAIN_ANN": _flag(brain.ANN_ENABLED),
+        "BRAIN_OBSIDIAN_RANK": _flag(brain.OBSIDIAN_RANK_ENABLED),
+        # Both obsidian flags DO move
+        # in_context_expanded now (score_one replays expand_with_links +
+        # expand_with_obsidian_signal after retrieve_context, same as
+        # _handle_question_impl). BLOCKS still can't move plain in_context or
+        # in_context_expanded, though: both are note-level ("is note X's path
+        # anywhere in context"), and blocks only ever change WHICH chunk of an
+        # already-included note gets pulled in, never whether the note itself
+        # is present. That needs eval_brain.py's judged answer quality, not
+        # this harness. Recorded here for attribution so two runs never emit
         # byte-identical headers under different settings.
-        "BRAIN_OBSIDIAN_BLOCKS": os.environ.get("BRAIN_OBSIDIAN_BLOCKS", "0"),
-        "BRAIN_AUTOLEARN": os.environ.get("BRAIN_AUTOLEARN", "1"),
+        "BRAIN_OBSIDIAN_BLOCKS": _flag(brain.OBSIDIAN_BLOCKS_ENABLED),
+        "BRAIN_AUTOLEARN": _flag(brain.AUTOLEARN_ENABLED),
     }
 
 
@@ -226,9 +270,11 @@ def main():
 
     agg = aggregate(results)
     print("\n%s" % ("-" * 68))
-    print("in_context %d/%d (%.1f%%)   MRR %.4f   median rank %s"
-          % (agg["in_context"], agg["n"], agg["in_context_pct"], agg["mrr"],
-             agg["median_rank"]))
+    print("in_context %d/%d (%.1f%%)   in_context_expanded %d/%d (%.1f%%)   "
+          "MRR %.4f   median rank %s"
+          % (agg["in_context"], agg["n"], agg["in_context_pct"],
+             agg["in_context_expanded"], agg["n"], agg["in_context_expanded_pct"],
+             agg["mrr"], agg["median_rank"]))
     print("recall@k  " + "  ".join(
         "@%d=%d" % (k, agg["recall@%d" % k]) for k in KS))
     print("found anywhere in ranking: %d/%d" % (agg["found_anywhere"], agg["n"]))

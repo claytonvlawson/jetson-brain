@@ -1,0 +1,1102 @@
+{
+  "fingerprint": {
+    "index": "index-mac/bm25.pkl",
+    "chunks": 1545,
+    "index_version": 5,
+    "tokenizer_version": "tok-nfkd-acr-sstem",
+    "embed_prefix_version": null,
+    "dense_model": "nomic-embed-text",
+    "dense_dim": 768,
+    "dense_rows": 1545,
+    "BRAIN_HYBRID": "1",
+    "BRAIN_DECOMPOSE": "0",
+    "BRAIN_HYDE": "1",
+    "BRAIN_TOP_K_FAST": "8",
+    "BRAIN_ANN": "0",
+    "BRAIN_OBSIDIAN_RANK": "1",
+    "BRAIN_OBSIDIAN_BLOCKS": "0",
+    "BRAIN_AUTOLEARN": "0"
+  },
+  "aggregate": {
+    "n": 40,
+    "in_context": 36,
+    "in_context_pct": 90.0,
+    "in_context_expanded": 37,
+    "in_context_expanded_pct": 92.5,
+    "mrr": 0.6471,
+    "found_anywhere": 40,
+    "median_rank": 1,
+    "recall@1": 21,
+    "recall@3": 27,
+    "recall@5": 35,
+    "recall@8": 36,
+    "recall@10": 37,
+    "recall@20": 39
+  },
+  "skipped": [],
+  "results": [
+    {
+      "id": "gallaudet_location",
+      "question": "Where is Gallaudet University?",
+      "expect_sources": [
+        "Organizations/Gallaudet University.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 27.51,
+      "retrieved_sources": [
+        "Organizations/Gallaudet University.md",
+        "Organizations/Gallaudet University.md",
+        "Concepts/Deaf President Now 1988.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "Organizations/Center for Black Deaf Studies.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md"
+      ],
+      "seconds": 5.467
+    },
+    {
+      "id": "gallaudet_founded",
+      "question": "What year was Gallaudet University founded?",
+      "expect_sources": [
+        "Organizations/Gallaudet University.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 19.65,
+      "retrieved_sources": [
+        "Organizations/Gallaudet University.md",
+        "Organizations/Gallaudet University.md",
+        "Concepts/Black ASL.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "Concepts/Deaf President Now 1988.md",
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "Concepts/Deaf President Now 1988.md",
+        "Organizations/Center for Black Deaf Studies.md"
+      ],
+      "seconds": 3.712
+    },
+    {
+      "id": "wfd_hq",
+      "question": "Where is the World Federation of the Deaf headquartered?",
+      "expect_sources": [
+        "Organizations/World Federation of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 29.26,
+      "retrieved_sources": [
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/World Federation of the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Deaf Community Organizations DMV.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Sources/WFD 2023 - Declaration on Rights of Deaf Children Jeju.md",
+        "Organizations/European Union of the Deaf.md"
+      ],
+      "seconds": 3.498
+    },
+    {
+      "id": "wfd_founded",
+      "question": "When was the World Federation of the Deaf founded?",
+      "expect_sources": [
+        "Organizations/World Federation of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 43.17,
+      "retrieved_sources": [
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Sources/WFD 2023 - Declaration on Rights of Deaf Children Jeju.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "Organizations/National Black Deaf Advocates.md"
+      ],
+      "seconds": 3.102
+    },
+    {
+      "id": "eud_hq",
+      "question": "Where is the European Union of the Deaf based?",
+      "expect_sources": [
+        "Organizations/European Union of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 44.23,
+      "retrieved_sources": [
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Sources/Sign Language AI and Ethics/EUD 2025 - Ethical Framework on AI and Sign Language.md",
+        "Organizations/Organizations Home.md",
+        "Sources/Sign Language AI and Ethics/EUD 2025 - Ethical Framework on AI and Sign Language.md",
+        "Sources/Sign Language AI and Ethics/Venade de Sousa 2025 - Sign Language in Era of AI.md"
+      ],
+      "seconds": 4.087
+    },
+    {
+      "id": "eud_founded",
+      "question": "When was the European Union of the Deaf founded?",
+      "expect_sources": [
+        "Organizations/European Union of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 54.55,
+      "retrieved_sources": [
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/European Union of the Deaf.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Sources/Sign Language AI and Ethics/EUD 2025 - Ethical Framework on AI and Sign Language.md",
+        "Organizations/National Black Deaf Advocates.md"
+      ],
+      "seconds": 3.412
+    },
+    {
+      "id": "nad_founded",
+      "question": "When was the National Association of the Deaf founded?",
+      "expect_sources": [
+        "Organizations/National Association of the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 46.43,
+      "retrieved_sources": [
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Organizations/AG Bell Association.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/National Deaf Center.md"
+      ],
+      "seconds": 4.521
+    },
+    {
+      "id": "msd_founded",
+      "question": "What year did the Maryland School for the Deaf open, and in what city?",
+      "expect_sources": [
+        "Organizations/Maryland School for the Deaf.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 21.17,
+      "retrieved_sources": [
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help DC and Maryland Local Services.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Early Intervention DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md"
+      ],
+      "seconds": 3.464
+    },
+    {
+      "id": "nbda_founded",
+      "question": "When was National Black Deaf Advocates founded?",
+      "expect_sources": [
+        "Organizations/National Black Deaf Advocates.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 70.35,
+      "retrieved_sources": [
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Association of the Deaf.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Organizations/National Black Deaf Advocates.md",
+        "Concepts/Black ASL.md"
+      ],
+      "seconds": 4.023
+    },
+    {
+      "id": "ndc_location",
+      "question": "Where is the National Deaf Center based?",
+      "expect_sources": [
+        "Organizations/National Deaf Center.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 36.74,
+      "retrieved_sources": [
+        "Organizations/National Deaf Center.md",
+        "Organizations/National Deaf Center.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "Organizations/National Deaf Center.md",
+        "Organizations/National Deaf Center.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md"
+      ],
+      "seconds": 3.671
+    },
+    {
+      "id": "clerc_location",
+      "question": "Where is the Laurent Clerc National Deaf Education Center located?",
+      "expect_sources": [
+        "Organizations/Laurent Clerc National Deaf Education Center.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+subq+hyde",
+      "n_subq": 2,
+      "top_score": 77.34,
+      "retrieved_sources": [
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Organizations/National Deaf Center.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Organizations/National Deaf Center.md"
+      ],
+      "seconds": 4.588
+    },
+    {
+      "id": "legal_recognition_author",
+      "question": "Who wrote The Legal Recognition of Sign Languages?",
+      "expect_sources": [
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "factual_short",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 34.26,
+      "retrieved_sources": [
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Thesis/Literature Review - Ethical Ownership of SLR Databases (Draft).md",
+        "Concepts/Sign Language Recognition.md",
+        "Concepts/Sign Language Recognition.md",
+        "Sources/De Meulder Murray 2017 - Buttering Their Bread on Both Sides.md",
+        "Sources/De Meulder Murray 2017 - Buttering Their Bread on Both Sides.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md"
+      ],
+      "seconds": 3.02
+    },
+    {
+      "id": "language_deprivation_1",
+      "question": "Our pediatrician told us that once our deaf son gets his cochlear implant he really won't need to learn to sign, and honestly I've heard that starting ASL now could slow down his spoken English. Is that right, or would waiting on sign language actually cost him something?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 45.08,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+        "Sources/Grosjean 2001 - The Right of the Deaf Child to Grow Up Bilingual.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md"
+      ],
+      "seconds": 5.341
+    },
+    {
+      "id": "language_deprivation_2",
+      "question": "I'm a graduate student and I keep reading that deaf kids who didn't get a full language early on can struggle later with things like planning and memory. What is actually going on developmentally, and which researcher's work should I be citing on this?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "Sources/Language Deprivation/Hall 2017 - What You Dont Know Can Hurt You.md",
+        "People/Wyatte C. Hall.md"
+      ],
+      "rank": 2,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 35.49,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Researchers FAQ.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/References.md",
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+        "LanguageDeprivationAgent/References.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md"
+      ],
+      "seconds": 4.99
+    },
+    {
+      "id": "critical_period_1",
+      "question": "My cousin keeps telling me our deaf toddler will pick up signing whenever she's good and ready, so honestly, is there any real harm in just holding off on ASL until she's a bit older?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md"
+      ],
+      "rank": 11,
+      "in_context": false,
+      "in_context_expanded": false,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 25.82,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md"
+      ],
+      "seconds": 4.805
+    },
+    {
+      "id": "critical_period_2",
+      "question": "Our audiologist wants us to focus on a cochlear implant and spoken English first and skip signing for now to avoid confusing our baby, but I keep reading warnings about timing, so what does the science actually say about how waiting affects a deaf child's language development?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "rank": 6,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 37.5,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Concepts/EHDI Early Hearing Detection and Intervention.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Researchers FAQ.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "seconds": 4.826
+    },
+    {
+      "id": "asl_full_language_1",
+      "question": "My mother-in-law keeps insisting that what Deaf people do with their hands is basically English acted out, so it doesn't really count as a language of its own. Is she right?",
+      "expect_sources": [
+        "Concepts/American Sign Language.md",
+        "People/Robbin Battison.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 29.15,
+      "retrieved_sources": [
+        "People/Robbin Battison.md",
+        "Concepts/American Sign Language.md",
+        "Concepts/Linguistic Human Rights.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/De Meulder Murray 2017 - Buttering Their Bread on Both Sides.md",
+        "International-Law/Northern Ireland Sign Language Bill 2026.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "LanguageDeprivationAgent/Parents FAQ.md"
+      ],
+      "seconds": 4.671
+    },
+    {
+      "id": "asl_full_language_2",
+      "question": "I just got a Deaf student who signs, and I earnestly want to understand what linguists have actually established that makes ASL a complete language on par with spoken ones rather than a simplified communication system. Can you walk me through it?",
+      "expect_sources": [
+        "Concepts/American Sign Language.md"
+      ],
+      "rank": 4,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 39.51,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "Concepts/American Sign Language.md",
+        "Datasets/ASLLRP.md",
+        "Concepts/American Sign Language.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Datasets/ASL-LEX.md"
+      ],
+      "seconds": 5.186
+    },
+    {
+      "id": "bilingual_bimodal_1",
+      "question": "My baby was just identified as deaf and her pediatrician says we should pour everything into speech therapy and worry about reading later. Is there any real harm in raising her with sign language and written English side by side from the very start instead?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md"
+      ],
+      "rank": 3,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 35.44,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Parent Guidance/First 90 Days After Diagnosis.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md"
+      ],
+      "seconds": 5.204
+    },
+    {
+      "id": "bilingual_bimodal_2",
+      "question": "Isn't teaching a deaf kid ASL and English at the same time just doubling the workload and setting both languages up to lag? Why do Deaf schools insist on running the two together rather than committing to one?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md"
+      ],
+      "rank": 4,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 25.89,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "Sources/Grosjean 2001 - The Right of the Deaf Child to Grow Up Bilingual.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Other Deaf Resources DMV.md"
+      ],
+      "seconds": 4.775
+    },
+    {
+      "id": "deaf_gain_1",
+      "question": "The audiologist keeps describing my toddler's deafness only as a loss we need to correct, and it makes me uneasy. Is there a serious way of thinking that treats growing up deaf as adding something valuable to a child's life rather than just a shortfall?",
+      "expect_sources": [
+        "Concepts/Deaf Gain.md"
+      ],
+      "rank": 2,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 32.33,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "Organizations/National Deaf Center.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md"
+      ],
+      "seconds": 4.736
+    },
+    {
+      "id": "deaf_gain_2",
+      "question": "A friend mentioned there's a phrase first spoken by a Deaf performance artist and later developed by two scholars that deliberately turns the whole idea of 'hearing loss' upside down. Who originated it and what is it actually claiming?",
+      "expect_sources": [
+        "Concepts/Deaf Gain.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 22.75,
+      "retrieved_sources": [
+        "Concepts/Deaf Gain.md",
+        "Concepts/Deaf Gain.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "People/Tom Humphries.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "Concepts/Deaf Epistemology.md",
+        "People/Wyatte C. Hall.md",
+        "Sources/Language Deprivation/Hall Dye Siddiqi 2023 - ACEs and Hearing Loss.md"
+      ],
+      "seconds": 4.472
+    },
+    {
+      "id": "crpd_language_rights_1",
+      "question": "A relative keeps insisting that treating sign language as a 'real language' with equal standing is just feel-good political correctness with no legal weight behind it. Is there actually a binding international agreement that backs the idea that signed languages count as full languages?",
+      "expect_sources": [
+        "Concepts/CRPD.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 36.07,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Concepts/CRPD.md",
+        "International-Law/Northern Ireland Sign Language Bill 2026.md",
+        "Concepts/Linguistic Human Rights.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md"
+      ],
+      "seconds": 4.5
+    },
+    {
+      "id": "crpd_language_rights_2",
+      "question": "My daughter is deaf and her school keeps framing signing as an optional therapy service they can cut when budgets are tight. Does any human rights treaty actually say she has a right to be educated in a signed language rather than it being a favor they choose to grant?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "CRPD/Article 24 Education.md"
+      ],
+      "rank": 3,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 33.98,
+      "retrieved_sources": [
+        "Sources/De Meulder 2018 - Education in Sign Language as Human Right.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Sources/De Meulder 2018 - Education in Sign Language as Human Right.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "CRPD/Article 24 Education.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md"
+      ],
+      "seconds": 4.979
+    },
+    {
+      "id": "legal_recognition_1",
+      "question": "Our government just passed a law that officially names our national sign language, so does that mean Deaf people in our country now have everything they need?",
+      "expect_sources": [
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Sources/De Meulder 2014 - UNCRPD and Sign Language Peoples.md"
+      ],
+      "rank": 5,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 33.96,
+      "retrieved_sources": [
+        "International-Law/Northern Ireland Sign Language Bill 2026.md",
+        "Concepts/Deaf Digital Law.md",
+        "Concepts/Deaf Digital Law.md",
+        "Organizations/World Federation of the Deaf.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+        "International-Law/Northern Ireland Sign Language Bill 2026.md",
+        "Sources/De Meulder 2014 - UNCRPD and Sign Language Peoples.md",
+        "International-Law/Northern Ireland Sign Language Bill 2026.md"
+      ],
+      "seconds": 5.082
+    },
+    {
+      "id": "legal_recognition_2",
+      "question": "I teach Deaf students and I'm trying to understand why scholars insist there's a real difference between a country simply mentioning sign language in its constitution and a country that truly protects the rights of its Deaf community. Can you explain what's at stake in that distinction?",
+      "expect_sources": [
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "Sources/De Meulder Murray 2017 - Buttering Their Bread on Both Sides.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 31.08,
+      "retrieved_sources": [
+        "Sources/De Meulder Murray 2017 - Buttering Their Bread on Both Sides.md",
+        "Sources/De Meulder 2015 - Legal Recognition of Sign Languages.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/De Meulder 2014 - UNCRPD and Sign Language Peoples.md",
+        "Organizations/World Federation of the Deaf.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "Concepts/Linguistic Human Rights.md",
+        "Concepts/Deaf Digital Law.md"
+      ],
+      "seconds": 4.737
+    },
+    {
+      "id": "cochlear_implant_myth_1",
+      "question": "My baby was just approved for a cochlear implant, so is there really any point in also raising her with sign language?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 26.81,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 1 to 3 Language Explosion.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md"
+      ],
+      "seconds": 4.882
+    },
+    {
+      "id": "cochlear_implant_myth_2",
+      "question": "A colleague insists that letting deaf children sign will hold back their speech once they're implanted, so is that claim actually supported by research?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 19.5,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "Sources/Language Deprivation/Gulati 2018 - Language Deprivation Syndrome.md",
+        "Sources/ASL Linguistics and Acquisition/Hall Hall Caselli 2019 - Deaf Children Need Language.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md"
+      ],
+      "seconds": 4.647
+    },
+    {
+      "id": "gallaudet_1",
+      "question": "My daughter is Deaf, and her IEP team keeps mentioning a school in Washington, D.C. where every class is taught in sign language. What is that place and why would it be a good fit for her?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "Organizations/Gallaudet University.md"
+      ],
+      "rank": 23,
+      "in_context": false,
+      "in_context_expanded": false,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 29.92,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help DC and Maryland Local Services.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "LanguageDeprivationAgent/Local Resources DMV/State Deaf Offices DC Maryland.md",
+        "Organizations/Laurent Clerc National Deaf Education Center.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Early Intervention DC Maryland.md"
+      ],
+      "seconds": 4.69
+    },
+    {
+      "id": "gallaudet_2",
+      "question": "Honestly, doesn't sending a deaf teenager to a college only for deaf people just wall them off from the hearing world instead of preparing them to live in it?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Researcher Briefs/Gallaudet Research Ecosystem.md",
+        "Organizations/Gallaudet University.md"
+      ],
+      "rank": 4,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 23.15,
+      "retrieved_sources": [
+        "Concepts/Deaf Gain.md",
+        "Organizations/National Deaf Center.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Organizations/National Deaf Center.md",
+        "Organizations/Gallaudet University.md",
+        "Organizations/National Deaf Center.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md"
+      ],
+      "seconds": 4.84
+    },
+    {
+      "id": "maryland_school_deaf_1",
+      "question": "My son is deaf and everyone keeps telling me the state school up in Frederick would be better for his language than the mainstream program he's in now, but honestly, wouldn't surrounding him with only other deaf kids just hold him back?",
+      "expect_sources": [
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md"
+      ],
+      "rank": 4,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 42.64,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Parent Guidance/Where to Find Help National Organizations.md",
+        "LanguageDeprivationAgent/Parents FAQ.md"
+      ],
+      "seconds": 4.794
+    },
+    {
+      "id": "maryland_school_deaf_2",
+      "question": "I teach elementary students and I'm trying to understand the actual mechanism: what happens at MSD's Frederick and Columbia campuses that lets a deaf kid who showed up with almost no language finally start catching up?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "Organizations/Maryland School for the Deaf.md"
+      ],
+      "rank": 2,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 35.12,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Parent Guidance/Starting Late Ages 5 and Up.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Summer Camps for Deaf Children DC Maryland.md"
+      ],
+      "seconds": 5.017
+    },
+    {
+      "id": "deaf_community_transmission_1",
+      "question": "My newborn is deaf and no one in our family signs. Won't she just soak up ASL from us at home, the same way a hearing baby picks up whatever language the parents speak?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md"
+      ],
+      "rank": 4,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 37.13,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "LanguageDeprivationAgent/Parent Guidance/Months 3 to 12 Early Exposure.md",
+        "LanguageDeprivationAgent/00 Agent Home.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md"
+      ],
+      "seconds": 4.76
+    },
+    {
+      "id": "deaf_community_transmission_2",
+      "question": "I just started teaching in a Deaf education program and I'm surprised how much the older Deaf students and the Deaf staff seem to shape the little ones' language and identity. Why does so much of that come from the community instead of from the kids' own homes?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md"
+      ],
+      "rank": 5,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 32.59,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Ages 3 to 5 Pre-K Decisions.md",
+        "Organizations/Maryland School for the Deaf.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md"
+      ],
+      "seconds": 4.822
+    },
+    {
+      "id": "interpreting_access_1",
+      "question": "My company always books a sign language interpreter whenever our deaf employee has a meeting, so isn't the workplace already fully accessible to him?",
+      "expect_sources": [
+        "LanguageDeprivationAgent/Local Resources DMV/Interpreters and Communication Access DC Maryland.md"
+      ],
+      "rank": 10,
+      "in_context": false,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 27.24,
+      "retrieved_sources": [
+        "Organizations/World Federation of the Deaf.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Pediatric Audiology DC Maryland.md",
+        "LanguageDeprivationAgent/00 Agent Home.md",
+        "LanguageDeprivationAgent/Local Resources DMV/State Deaf Offices DC Maryland.md",
+        "Concepts/Signing Avatars.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md"
+      ],
+      "seconds": 4.568
+    },
+    {
+      "id": "interpreting_access_2",
+      "question": "My daughter is deaf and I want her school to truly do right by her, so what does genuine communication access look like beyond just assigning someone to sign for her?",
+      "expect_sources": [
+        "US-Law/IDEA.md",
+        "CRPD/Article 24 Education.md",
+        "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md"
+      ],
+      "rank": 12,
+      "in_context": false,
+      "in_context_expanded": false,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 33.32,
+      "retrieved_sources": [
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Schools and Programs for Deaf Children DC Maryland.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "LanguageDeprivationAgent/Parent Guidance/Choosing a Communication Approach.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "LanguageDeprivationAgent/Local Resources DMV/Other Deaf Resources DMV.md"
+      ],
+      "seconds": 4.845
+    },
+    {
+      "id": "deaf_identity_audism_1",
+      "question": "Our audiologist keeps measuring my daughter's hearing levels, but a teacher of the deaf told us there's also a whole community-and-identity side to being deaf. How is belonging to that community actually different from just not being able to hear well?",
+      "expect_sources": [
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "Concepts/Deaf Gain.md"
+      ],
+      "rank": 4,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 34.08,
+      "retrieved_sources": [
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "Concepts/Deaf Epistemology.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Core/Mental Health and Public Health.md",
+        "Sources/Sign Language AI and Ethics/Atwell et al 2025 - Nothing About Us Without Us.md"
+      ],
+      "seconds": 5.14
+    },
+    {
+      "id": "deaf_identity_audism_2",
+      "question": "People keep using the word 'audism' and honestly it sounds like a made-up buzzword to me. Where did it even come from, and isn't wanting a deaf kid to learn to hear and talk just normal parenting rather than some kind of prejudice?",
+      "expect_sources": [
+        "Thesis/The Audism Circuit.md",
+        "People/Tom Humphries.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 23.01,
+      "retrieved_sources": [
+        "People/Tom Humphries.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+        "People/Tom Humphries.md",
+        "Concepts/Deaf Gain.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Concepts/Language Deprivation.md"
+      ],
+      "seconds": 4.875
+    },
+    {
+      "id": "deaf_world_visual_1",
+      "question": "Some Deaf adults told me that they 'take in the world through their eyes' and belong to their own group with its own way of life, but honestly, isn't that just putting a positive spin on not being able to hear?",
+      "expect_sources": [
+        "Concepts/Deaf Epistemology.md",
+        "Concepts/Deaf Gain.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md"
+      ],
+      "rank": 1,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "analytic",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 34.51,
+      "retrieved_sources": [
+        "Concepts/Deaf Gain.md",
+        "Concepts/Deaf Gain.md",
+        "Concepts/Deaf Gain.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "LanguageDeprivationAgent/Parent Guidance/Finding Deaf Mentors and Community.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "Sources/Sign Language AI and Ethics/Atwell et al 2025 - Nothing About Us Without Us.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md"
+      ],
+      "seconds": 4.893
+    },
+    {
+      "id": "deaf_world_visual_2",
+      "question": "I'm a teacher who just started working with a Deaf student, and I want to understand what people mean when they call the Deaf community its own people with an experience of life centered on sight, and how their language reflects that. Can you explain?",
+      "expect_sources": [
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "Concepts/Deaf Epistemology.md"
+      ],
+      "rank": 3,
+      "in_context": true,
+      "in_context_expanded": true,
+      "keep_k": 8,
+      "intent": "multi",
+      "mode": "hybrid+hyde",
+      "n_subq": 0,
+      "top_score": 36.08,
+      "retrieved_sources": [
+        "Concepts/Sign Language Peoples.md",
+        "LanguageDeprivationAgent/Parents FAQ.md",
+        "Sources/Lane Hoffmeister Bahan 1996 - A Journey into the DEAF-WORLD.md",
+        "Concepts/Sign Language Peoples.md",
+        "Concepts/Deaf Gain.md",
+        "Concepts/Deaf Tech.md",
+        "Sources/Sign Language AI and Ethics/Synthesis - Deaf Signers and Intelligent Personal Assistants.md",
+        "Concepts/Deaf Epistemology.md"
+      ],
+      "seconds": 5.413
+    }
+  ]
+}
