@@ -750,6 +750,12 @@ def load_index():
         sys.exit(1)
 
     meta = _build_meta(data, chunks)
+    # Carry the build provenance through to callers. It is validated above and
+    # then discarded, which left the eval harness printing "tok=None" for a
+    # perfectly good index: a measurement tool that cannot name the artifact it
+    # measured is how two runs get compared across a silent index change.
+    meta["tokenizer_version"] = idx_tok_ver
+    meta["index_version"] = data.get("version")
     # Hybrid retrieval is gated on the dense block EXISTING, not on the flag, so
     # an index built without --embed silently downgrades a "hybrid on" system to
     # BM25-only with no signal anywhere. That is how this vault ran for a full
@@ -2243,11 +2249,20 @@ def _shape_for_intent(system_prompt, intent):
     return system_prompt + _INTENT_DIRECTIVES.get(intent, "")
 
 
-def _handle_question_impl(model, question, history, bm25, chunks, meta,
-                          web_enabled, run, persona, tm, qvec=None,
-                          qvec_model=None):
-    # --- Retrieval: BM25 scoring -----------------------------------------
-    run.running("bm25")
+def retrieve_context(question, bm25, chunks, meta, model=None,
+                     persona="default", tm=None, qvec=None, qvec_model=None):
+    """Run the retrieval half of a turn and return the ordered chunks.
+
+    Extracted verbatim from _handle_question_impl so the retrieval eval harness
+    (eval_retrieval.py) scores THE SAME code production answers with. Adding a
+    second implementation for measurement is how a harness starts lying: the
+    build_note_chunks() seam exists for the same reason on the index side.
+
+    Returns a dict with keys: intent, wh, qtok, scores, order, keep_k,
+    retrieved, mode, top_score, n_subq. `tm` is filled in place when given.
+    """
+    if tm is None:
+        tm = {}
     _t = time.perf_counter()
     intent, wh = classify_intent(question)
     qtok = query_tokens(question)
@@ -2291,6 +2306,9 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     retrieved = []
     top_score = 0.0
     mode = "bm25"
+    order = None
+    order_full = None
+    keep_k = TOP_K_FAST
     if len(scores):
         ranked = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)
         if model == DEEP_MODEL:
@@ -2325,6 +2343,7 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
                 dense_pool = [i for i in dense_ranked
                               if dscore[i] > float("-inf")][:RRF_POOL]
                 order = _rrf_fuse([bm25_pool, dense_pool] + sub_rankings)
+                order_full = order
                 mode = "hybrid+subq" if sub_rankings else "hybrid"
         if order is None:
             # BM25 + query-time rerank (un-embedded index, hybrid off, or the
@@ -2341,6 +2360,7 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
             _t = time.perf_counter()
             order = _rerank_by_embedding(question, chunks, cand_ids, qvec=qvec,
                                          qvec_model=qvec_model)
+            order_full = order
             tm["rerank"] = time.perf_counter() - _t
         if order and (persona == "parent" or intent == "multi"):
             # A multi-entity question needs facts from several different notes,
@@ -2349,6 +2369,13 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
             # Maryland School for the Deaf?" retrieved six Gallaudet chunks and
             # zero MSD ones, so half the answer could not be in context at any
             # generation quality. Same failure the parent rubric hit, same fix.
+            # Keep the pre-diversify ranking for measurement. _diversify_order
+            # returns AT MOST keep_k ids, so scoring "where did the target
+            # rank" against its output silently caps every multi-intent
+            # question at keep_k and reports anything past the window as "not
+            # retrieved at all". That conflates a ranking miss with a window
+            # miss, which are different problems with different fixes.
+            order_full = list(order)
             order = _diversify_order(
                 order, chunks, keep_k,
                 PARENT_MAX_PER_SOURCE if persona == "parent"
@@ -2360,6 +2387,25 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
                 top_score = float(scores[ranked[0]])
             except Exception:
                 top_score = 0.0
+    return {"intent": intent, "wh": wh, "qtok": qtok, "scores": scores,
+            "order": order, "order_full": order_full if order_full is not None
+            else order, "keep_k": keep_k, "retrieved": retrieved,
+            "mode": mode, "top_score": top_score, "n_subq": len(sub_rankings)}
+
+
+def _handle_question_impl(model, question, history, bm25, chunks, meta,
+                          web_enabled, run, persona, tm, qvec=None,
+                          qvec_model=None):
+    # --- Retrieval: BM25 scoring -----------------------------------------
+    run.running("bm25")
+    _r = retrieve_context(question, bm25, chunks, meta, model=model,
+                          persona=persona, tm=tm, qvec=qvec,
+                          qvec_model=qvec_model)
+    intent = _r["intent"]
+    scores = _r["scores"]
+    retrieved = _r["retrieved"]
+    mode = _r["mode"]
+    top_score = _r["top_score"]
     vsrc = vault_sources(retrieved)
     tm["mode"] = mode
     run.done("bm25", "%d chunks · %s · top score %.1f · %s" % (
