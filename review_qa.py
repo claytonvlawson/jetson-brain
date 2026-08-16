@@ -33,6 +33,11 @@ import subprocess
 import sys
 import time
 
+try:
+    import brain_input
+except Exception:
+    brain_input = None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.environ.get("ADVISOR_LOG_DIR", "/mnt/nvme/brain/advisor")
 VAULT_DIR = os.environ.get("BRAIN_VAULT", "/mnt/nvme/brain/vault")
@@ -90,17 +95,34 @@ def read_multiline(prompt):
     print(prompt)
     print("(Enter alone keeps the original. To replace it, type the new answer "
           "and finish with a single '.' on its own line.)")
-    first = input()
-    if first.strip() == "":
-        return None
-    if first.strip() == ".":
-        return ""
-    lines = [first]
-    while True:
-        line = input()
-        if line.strip() == ".":
-            break
-        lines.append(line)
+    # _read routes through brain_input so arrow keys edit the line instead of
+    # echoing "^[[A", and so Ctrl-D ends the entry instead of raising an
+    # uncaught EOFError out of the review loop. Free-form prose is the one place
+    # in this file where the missing line editor actually hurt.
+    if brain_input is not None:
+        _read = brain_input.read_line
+    else:
+        _read = input
+    try:
+        first = _read("")
+        if first.strip() == "":
+            return None
+        if first.strip() == ".":
+            return ""
+        lines = [first]
+        while True:
+            line = _read("")
+            if line.strip() == ".":
+                break
+            lines.append(line)
+    except EOFError:
+        # Ctrl-D: treat what has been typed so far as the answer, and an empty
+        # buffer as "keep the original".
+        print("")
+        try:
+            lines
+        except NameError:
+            return None
     return "\n".join(lines).strip()
 
 

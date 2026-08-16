@@ -38,6 +38,10 @@ try:
     from brain_ui import UI
 except Exception:
     UI = None
+try:
+    import brain_input
+except Exception:
+    brain_input = None
 
 # Paths (fixed install layout on the Jetson). BRAIN_INDEX overrides the pickle
 # path so two index variants can be A/B'd side by side without touching the
@@ -618,22 +622,31 @@ USER_AGENT = (
 # ESC [ ? 1007 l  disable ALTERNATE SCROLL -- the one that turns wheel into arrows
 _DISABLE_MOUSE = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1007l"
 
+# The implementation moved to brain_input, which also owns the line editor and
+# the cursor restore, so review_qa.py can share it without importing brain.py.
+# These names stay bound here because callers already import them from brain.
+if brain_input is not None:
+    _DISABLE_MOUSE = brain_input._DISABLE_MOUSE
+    quiet_scroll = brain_input.quiet_scroll
+    restore_cursor = brain_input.restore_cursor
+else:  # brain_input missing: keep the old one-shot behaviour rather than die.
+    def quiet_scroll():
+        try:
+            if not sys.stdout.isatty():
+                return
+            sys.stdout.write(_DISABLE_MOUSE)
+            sys.stdout.flush()
+            atexit.register(_restore_scroll)
+        except Exception:
+            pass
 
-def quiet_scroll():
-    """Stop the terminal from turning mouse/trackpad scrolls into keystrokes.
-
-    Emits the reset sequences once at startup and re-emits them on exit so a
-    program that ran before us (and left a mouse mode on) does not leak into the
-    next shell. No-op when stdout is not a TTY (piped or logged). Never raises.
-    """
-    try:
-        if not sys.stdout.isatty():
-            return
-        sys.stdout.write(_DISABLE_MOUSE)
-        sys.stdout.flush()
-        atexit.register(_restore_scroll)
-    except Exception:
-        pass
+    def restore_cursor():
+        try:
+            if sys.stdout.isatty():
+                sys.stdout.write("\x1b[?25h")
+                sys.stdout.flush()
+        except Exception:
+            pass
 
 
 def _restore_scroll():
@@ -3305,6 +3318,16 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     # Reference URLs offered to the model for optional FETCH.
     ref_urls = collect_reference_urls(context_chunks, meta)
 
+    # Default the scholar depth stage to SKIPPED before phase 1. The stage is
+    # REGISTERED by the caller on `scholar_once and SCHOLAR_PASS2`, but it is
+    # only DRIVEN inside the vault_ok branch below. Every other exit -- phase 1
+    # INSUFFICIENT into the skill loop, _answer_no_web, or the phase-2 web route
+    # -- would otherwise leave "Depth pass (queued)" frozen in the final tree,
+    # which is the never-resolving stage this whole change exists to remove.
+    # Ordering is load-bearing: running()/done() below overwrite this, and
+    # by_key makes it a silent no-op whenever the stage was not registered.
+    run.skip("depth", "vault answer needed no second pass")
+
     # === PHASE 1: vault-first answer attempt (ALWAYS) ====================
     # The thesis vault is consulted for an actual answer before any web access.
     # Strict grounding (VAULT_FIRST_SYSTEM): answer only from the snippets, or
@@ -3392,9 +3415,15 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
         # runs before it and the citation footer is appended after it.
         _draft = first
         if persona == "scholar" and SCHOLAR_PASS2 and context_chunks:
+            # Drive the "depth" stage so the extra ~30-45s generation is visible
+            # instead of a frozen spinner. The stage is only registered when the
+            # run was started with depth=True, and by_key makes it a no-op
+            # otherwise, so this is safe on every other path.
+            run.running("depth")
             first, context_chunks, linked_ids = _scholar_second_pass(
                 model, question, bm25, chunks, meta, context_chunks,
                 linked_ids, system_prompt, first, tm)
+            run.done("depth", tm.get("scholar_error") or "")
         _flags = faithfulness_flags(
             first, format_vault_context(context_chunks, linked_ids))
         footer = ""
@@ -3618,8 +3647,14 @@ class _NullRun:
 def main():
     model = parse_args(sys.argv[1:])
 
-    # Stop mouse-wheel / trackpad scrolls from leaking in as arrow keys.
-    quiet_scroll()
+    # Install line editing (arrow keys, history) and stop mouse-wheel /
+    # trackpad scrolls leaking in as arrow keys. Importing readline is what
+    # makes input() do line editing at all; without it the tty is in canonical
+    # mode and an arrow key echoes as the literal junk "^[[A".
+    if brain_input is not None:
+        brain_input.setup(os.path.join(CACHE_DIR, ".brain_history"))
+    else:
+        quiet_scroll()
 
     ui = UI() if UI is not None else None
 
@@ -3681,13 +3716,17 @@ def main():
 
     while True:
         try:
-            line = ui.read_prompt() if ui is not None else input("\nyou> ")
+            line = (ui.read_prompt() if ui is not None
+                    else (brain_input.read_line("\nyou> ")
+                          if brain_input is not None else input("\nyou> ")))
         except EOFError:
             print("\nbye")
             break
         except KeyboardInterrupt:
-            print("\nbye")
-            break
+            # Ctrl-C at the prompt abandons the half-typed line and re-prompts,
+            # as every other REPL does. Ctrl-D (EOFError, above) is the way out.
+            print("")
+            continue
 
         question = line.strip()
         if not question:
@@ -3797,83 +3836,97 @@ def main():
         # Start a run so the whole question renders like an ultracode pipeline.
         # When brain_ui is unavailable (ui is None), fall back to a no-op run so
         # the plain path still answers instead of crashing on run.* calls.
-        run = ui.start_run(q_model) if ui is not None else _NullRun()
+        run = (ui.start_run(q_model, depth=bool(scholar_once and SCHOLAR_PASS2))
+               if ui is not None else _NullRun())
 
         # Question embedding captured from the semantic router's miss, reused by
         # hybrid dense retrieval so a fresh turn embeds the question ONCE.
         sem_qvec = None
 
-        # Fast path: serve from the answer cache before retrieval or a model call.
-        # Deep (/deep) answers bypass the cache so they never collide with a fast draft.
-        if cache_enabled and cache is not None and not deep_once \
-                and not parent_once and not scholar_once:
-            try:
-                run.running("cache")
-                hit = cache.lookup(question)
-            except Exception:
-                hit = None
-            if hit:
-                cached_answer = hit.get("answer", "") or ""
-                age = str(hit.get("created", "?"))
-                run.done("cache", "hit · served from cache (saved " + age + ")")
-                for k in ("bm25", "expand", "model", "web"):
-                    run.skip(k, "cache hit")
-                sink = run.begin_answer()
-                sink(cached_answer)
-                run.sources(hit.get("sources") or [], vault_name=VAULT_NAME)
-                history.append({"role": "user", "content": question})
-                history.append({"role": "assistant", "content": cached_answer})
-                trim_history(history)
-                run.finish()
-                continue
-            # Keyword cache missed. Try the semantic concept-router before RAG:
-            # it serves a vetted concept answer when the question embeds close to
-            # exactly one concept, otherwise returns None and we compute fresh.
-            if semantic is not None:
-                try:
-                    m, sem_qvec = semantic.match_with_vec(question)
-                except Exception:
-                    m, sem_qvec = None, None
-                if m and (m.get("answer") or "").strip():
-                    sem_answer = m["answer"]
-                    run.done("cache", "semantic hit · %s (cos %.2f)" % (
-                        m.get("concept", ""), m.get("score", 0.0)))
-                    for k in ("bm25", "expand", "model", "web"):
-                        run.skip(k, "semantic hit")
-                    sink = run.begin_answer()
-                    sink(sem_answer)
-                    run.sources(m.get("sources") or [], vault_name=VAULT_NAME)
-                    history.append({"role": "user", "content": question})
-                    history.append({"role": "assistant", "content": sem_answer})
-                    trim_history(history)
-                    run.finish()
-                    continue
-            run.done("cache", "miss · computing fresh")
-        else:
-            run.skip("cache", "bypassed for /deep" if deep_once
-                     else ("bypassed for /parent" if parent_once
-                           else ("bypassed for /scholar" if scholar_once
-                                 else "cache disabled")))
-
+        # Everything from here to the matching `finally` runs with the cursor
+        # hidden by Run.__init__, so run.finish() -- which restores it and stops
+        # the animator -- must be unconditional. It used to be repeated by hand
+        # in each handler, which left the cache fast path below completely
+        # unguarded: its `except Exception` clauses do not catch KeyboardInterrupt
+        # (a BaseException), so a Ctrl-C during cache.lookup or the semantic
+        # match unwound straight out of main() and exited with the cursor still
+        # hidden, leaving the user's shell cursorless.
         try:
-            answer, sources = handle_question(
-                q_model, question, history, bm25, chunks, meta, web_enabled, run,
-                persona=("parent" if parent_once
-                         else "scholar" if scholar_once else "default"),
-                qvec=sem_qvec,
-                qvec_model=(getattr(semantic, "model", None)
-                            if semantic is not None else None),
-            )
-        except KeyboardInterrupt:
-            run.finish()
-            print("\n[interrupted, back to the prompt]")
-            continue
-        except Exception as exc:
-            run.finish()
-            print("[something went wrong handling that: " + str(exc) + "]")
-            continue
+            # Fast path: serve from the answer cache before retrieval or a model
+            # call. Deep (/deep) answers bypass the cache so they never collide
+            # with a fast draft.
+            if cache_enabled and cache is not None and not deep_once \
+                    and not parent_once and not scholar_once:
+                try:
+                    run.running("cache")
+                    hit = cache.lookup(question)
+                except Exception:
+                    hit = None
+                if hit:
+                    cached_answer = hit.get("answer", "") or ""
+                    age = str(hit.get("created", "?"))
+                    run.done("cache", "hit · served from cache (saved " + age + ")")
+                    for k in ("bm25", "expand", "model", "web"):
+                        run.skip(k, "cache hit")
+                    sink = run.begin_answer()
+                    sink(cached_answer)
+                    run.sources(hit.get("sources") or [], vault_name=VAULT_NAME)
+                    history.append({"role": "user", "content": question})
+                    history.append({"role": "assistant", "content": cached_answer})
+                    trim_history(history)
+                    continue
+                # Keyword cache missed. Try the semantic concept-router before
+                # RAG: it serves a vetted concept answer when the question embeds
+                # close to exactly one concept, otherwise returns None and we
+                # compute fresh.
+                if semantic is not None:
+                    try:
+                        m, sem_qvec = semantic.match_with_vec(question)
+                    except Exception:
+                        m, sem_qvec = None, None
+                    if m and (m.get("answer") or "").strip():
+                        sem_answer = m["answer"]
+                        run.done("cache", "semantic hit · %s (cos %.2f)" % (
+                            m.get("concept", ""), m.get("score", 0.0)))
+                        for k in ("bm25", "expand", "model", "web"):
+                            run.skip(k, "semantic hit")
+                        sink = run.begin_answer()
+                        sink(sem_answer)
+                        run.sources(m.get("sources") or [], vault_name=VAULT_NAME)
+                        history.append({"role": "user", "content": question})
+                        history.append({"role": "assistant", "content": sem_answer})
+                        trim_history(history)
+                        continue
+                run.done("cache", "miss · computing fresh")
+            else:
+                run.skip("cache", "bypassed for /deep" if deep_once
+                         else ("bypassed for /parent" if parent_once
+                               else ("bypassed for /scholar" if scholar_once
+                                     else "cache disabled")))
 
-        run.finish()
+            try:
+                answer, sources = handle_question(
+                    q_model, question, history, bm25, chunks, meta, web_enabled, run,
+                    persona=("parent" if parent_once
+                             else "scholar" if scholar_once else "default"),
+                    qvec=sem_qvec,
+                    qvec_model=(getattr(semantic, "model", None)
+                                if semantic is not None else None),
+                )
+            except KeyboardInterrupt:
+                # Halt the animator BEFORE printing. The `finally` below would
+                # do it microseconds later anyway, but only after the message is
+                # already on screen, leaving a (vanishingly small) window for a
+                # spinner frame to rewind over it. finish() is idempotent.
+                run.finish()
+                print("\n[interrupted, back to the prompt]")
+                continue
+            except Exception as exc:
+                run.finish()
+                print("[something went wrong handling that: " + str(exc) + "]")
+                continue
+        finally:
+            run.finish()
 
         # Store fresh answers in the cache (triggers the storage-optimization
         # pass and compounds the knowledge bank).
@@ -3896,3 +3949,8 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nbye")
+    finally:
+        # Last line of defence for the cursor. brain_input registers an atexit
+        # for this too, but atexit does not run on SIGTERM/SIGHUP and this costs
+        # nothing on the paths where it does.
+        restore_cursor()

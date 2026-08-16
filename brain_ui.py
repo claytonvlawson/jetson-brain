@@ -28,6 +28,11 @@ import shutil
 import threading
 import urllib.parse
 
+try:
+    import brain_input
+except Exception:
+    brain_input = None
+
 
 # ---------------------------------------------------------------------------
 # Color palette. Truecolor when the terminal advertises it, else 256-color.
@@ -220,6 +225,14 @@ class UI:
         except Exception:
             return 80
 
+    def height(self):
+        """Visible rows. Used to clamp the animator's cursor-up rewind, which
+        cannot address scrollback: \\x1b[NA stops at the top of the viewport."""
+        try:
+            return shutil.get_terminal_size((80, 24)).lines
+        except Exception:
+            return 24
+
     # -- welcome banner ---------------------------------------------------
     def welcome(self, model, chunk_count, cache_entries, vault_name, cache_dir):
         p, box = self.p, self.box
@@ -332,17 +345,38 @@ class UI:
         p, box = self.p, self.box
         w = self.width()
         inner = max(20, w - 3)
+        if not self.plain and self._can_edit():
+            top = " " + self.c(box["tl"] + box["h"] * inner + box["tr"], p.BORDER)
+            chips = "   " + self.c("/web  /model  /cache  /clear  /exit", p.MUTED_DARK)
+            hint = self.c("⏎ send", p.MUTED_DARK) if self.unicode else self.c("enter=send", p.MUTED_DARK)
+            self._w(chips + "    " + hint + "\n")
+            self._w(top + "\n")
+            # The caret is passed INTO input() rather than printed first. That is
+            # the whole point: readline derives the cursor column from the prompt
+            # string it was handed, so a pre-printed caret leaves it believing the
+            # line starts at column 0 when it starts at column 4 -- and every
+            # redraw, wrap and history recall then lands on top of the border.
+            # ansi_prompt() brackets the color escapes so they count as 0 columns.
+            caret = (" " + self.c(box["v"], p.BORDER) + " "
+                     + self.c(self.g["caret"], p.ACCENT, p.BOLD) + " ")
+            # There is deliberately NO closing border below the input line. It
+            # cannot survive readline redrawing a wrapped or recalled line over
+            # it, which is the conflict the old code conceded but drew anyway.
+            try:
+                return brain_input.read_line(brain_input.ansi_prompt(caret))
+            except (EOFError, KeyboardInterrupt):
+                self._w("\n")
+                raise
         if not self.plain:
+            # A TTY, but no line editor (or output is not the real stdout, so
+            # readline's writes would interleave with ours). Keep the old box.
             top = " " + self.c(box["tl"] + box["h"] * inner + box["tr"], p.BORDER)
             bot = " " + self.c(box["bl"] + box["h"] * inner + box["br"], p.BORDER)
             chips = "   " + self.c("/web  /model  /cache  /clear  /exit", p.MUTED_DARK)
             hint = self.c("⏎ send", p.MUTED_DARK) if self.unicode else self.c("enter=send", p.MUTED_DARK)
             self._w(top + "\n")
-            # Middle row: caret, then the terminal echoes typed input after it.
             self._w(" " + self.c(box["v"], p.BORDER) + " "
                     + self.c(self.g["caret"], p.ACCENT, p.BOLD) + " ")
-            # We cannot both draw a closing border AND use input() echo on the
-            # same line cleanly, so read here; the bottom border follows.
             try:
                 line = input()
             except (EOFError, KeyboardInterrupt):
@@ -354,24 +388,48 @@ class UI:
         # Plain mode: simple prompt.
         return input("\nyou> ")
 
+    def _can_edit(self):
+        """True when readline may drive this prompt.
+
+        readline writes to the process stdout directly, never through UI._w, so
+        if this UI was constructed over some other stream the two outputs would
+        interleave arbitrarily. In that case we fall back to the old path.
+        """
+        if brain_input is None or brain_input.readline is None:
+            return False
+        try:
+            return self.out is sys.stdout
+        except Exception:
+            return False
+
     # -- run / progress tree ----------------------------------------------
-    def start_run(self, model):
+    def start_run(self, model, depth=False):
         """Begin a pipeline run and return a Run handle. Stages are preset so
-        the tree shows queued/skipped items just like an ultracode run."""
+        the tree shows queued/skipped items just like an ultracode run.
+
+        `depth` registers the scholar second-pass stage. It is off by default
+        because the stage is only ever driven when the scholar persona runs with
+        BRAIN_SCHOLAR_PASS2 on; registered unconditionally it rendered "Depth
+        pass (queued)" on every question of every persona and never resolved,
+        since nothing called start/done/skip on it.
+        """
         stages = [
             Stage("cache", "Cache check", "Checking cache", "Retrieval"),
             Stage("bm25", "BM25 retrieve", "Retrieving", "Retrieval"),
             Stage("expand", "Wikilink expand", "Expanding links", "Retrieval"),
             Stage("model", model, "Consulting " + _short_model(model), "Generation"),
+        ]
+        if depth:
             # The scholar persona's second pass is a whole extra generation
             # (~30-45s) with streaming forced off, so without a registered
             # stage the user watches a frozen spinner for the duration. Note
             # that Run.by_key makes an UNregistered key a silent no-op: that is
             # why run.done("obsidian") and run.done("skills") already print
             # nothing today. A stage must be listed here to exist at all.
-            Stage("depth", "Depth pass", "Re-retrieving missed facets", "Generation"),
-            Stage("web", "Web fallback", "Fetching web", "Generation"),
-        ]
+            stages.append(
+                Stage("depth", "Depth pass", "Re-retrieving missed facets",
+                      "Generation"))
+        stages.append(Stage("web", "Web fallback", "Fetching web", "Generation"))
         return Run(self, stages)
 
     # -- simple messages --------------------------------------------------
@@ -395,6 +453,20 @@ class Run:
         self._frame = 0
         self._streaming = False
         self._detail_live = ""  # live token shown next to the running spinner
+        # Hard gate on the animator's writes. _stop asks it to finish the current
+        # frame; _muted forbids it from ever drawing again. The join() below has
+        # a timeout whose result was never checked, so a thread blocked in
+        # write() on a slow tty or an SSH link could outlive it and then splice
+        # cursor-up/erase escapes into the answer or the next prompt -- which is
+        # exactly how junk appeared on screen while the user was typing.
+        #
+        # It is an Event, and it is deliberately set WITHOUT taking self.lock.
+        # The animator holds that lock for the whole of _redraw, including the
+        # blocking write, so a muter that waited for the lock would block behind
+        # exactly the stuck thread it is trying to silence -- a deadlock that
+        # hangs the REPL, which is strictly worse than the corruption it fixes.
+        self._muted = threading.Event()
+        self._last_width = None
         if not self.ui.plain:
             self.ui._w("\x1b[?25l")  # hide cursor during animation
             self._thread = threading.Thread(target=self._animate, daemon=True)
@@ -442,9 +514,7 @@ class Run:
     def begin_answer(self):
         """Freeze the tree, print it once statically, and open the answer
         block with the accent bullet. Returns a token sink callable."""
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
+        self._halt_animator()
         if not self.ui.plain:
             self._redraw()
             self.ui._w("\x1b[?25h")  # restore cursor
@@ -503,16 +573,37 @@ class Run:
         self.ui._w("\n")
 
     def finish(self):
-        """Ensure the animator is stopped and the cursor restored."""
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
+        """Ensure the animator is stopped and the cursor restored.
+
+        Idempotent: several paths call this after begin_answer already did, and
+        \\x1b[?25h is a mode rather than a counter."""
+        self._halt_animator()
         if not self.ui.plain:
             self.ui._w("\x1b[?25h")
 
+    def _halt_animator(self):
+        """Stop the spinner thread and forbid it from ever drawing again.
+
+        join() is given a deadline and its result was previously ignored, so a
+        thread stuck in write() against a slow tty could return to the loop after
+        the main thread had moved on and interleave its rewind escapes with the
+        answer or the next prompt. Setting _muted under the same lock the
+        animator sees before every frame closes that window even when the join
+        times out. Muting never takes self.lock: the animator holds that lock
+        across its blocking write, so waiting for it here would deadlock against
+        the very thread being silenced."""
+        self._stop.set()
+        t = self._thread
+        if t is not None:
+            self._thread = None      # idempotent: a second call is a no-op
+            t.join(timeout=1.0)
+            if t.is_alive():
+                # Timed out, so it is stuck mid-write. Forbid any later frame.
+                self._muted.set()
+
     # -- rendering --------------------------------------------------------
     def _animate(self):
-        while not self._stop.is_set():
+        while not self._stop.is_set() and not self._muted.is_set():
             with self.lock:
                 self._frame = (self._frame + 1) % len(SPIN_FRAMES)
                 self._redraw()
@@ -520,21 +611,33 @@ class Run:
 
     def _redraw(self):
         """Compose and print the tree, rewinding over the previous draw."""
+        if self._muted.is_set():
+            return
         lines = self._compose()
         # Truncate to the terminal width so no status line wraps. A wrapped line
         # occupies 2 physical rows but is counted once, so the cursor-up rewind
         # below would under-shoot and the tree would creep downward each frame.
         w = self.ui.width() - 1
         lines = [_truncate_visible(ln, w) for ln in lines]
+        # A resize invalidates the rewind: the rows already on screen were
+        # wrapped at the OLD width, so they no longer occupy _last_lines physical
+        # rows. Rewinding by a stale count lands the cursor mid-tree and the
+        # \x1b[0J below then erases from the wrong row. Redraw fresh instead.
+        if self._last_width is not None and self._last_width != w:
+            self._last_lines = 0
+        self._last_width = w
         buf = []
         if self._last_lines:
+            # Never rewind past the top of the viewport: \x1b[NA clamps there
+            # anyway, so a tree taller than the screen would silently under-shoot
+            # every frame and march down it.
             buf.append("\x1b[%dA" % self._last_lines)  # cursor up
         buf.append("\r")
         for ln in lines:
             buf.append("\x1b[2K" + ln + "\n")  # clear line, print
         buf.append("\x1b[0J")  # clear anything below
         self.ui._w("".join(buf))
-        self._last_lines = len(lines)
+        self._last_lines = min(len(lines), max(1, self.ui.height() - 1))
 
     def _compose(self):
         p, g = self.ui.p, self.ui.g
