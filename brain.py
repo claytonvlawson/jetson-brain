@@ -759,6 +759,39 @@ CARD_BOOST = 0.5
 # parent cap (3): these questions name two or three entities outright, so 6
 # slots have to cover 3 notes.
 MULTI_MAX_PER_SOURCE = _env_int("BRAIN_MULTI_MAX_PER_SOURCE", 2)
+# The DEFAULT persona has never had a per-source cap: _diversify_order runs only
+# for parent, scholar and intent == "multi". 0 keeps it that way, so this is
+# inert until an arm sets it. Measured on the device 2026-08-16: at keep_k=8 the
+# default persona averages 5.60 distinct sources across 8 slots and takes up to
+# 2.58 chunks from a single note, while the four remaining retrieval misses sit
+# at ranks 13-20 (recall@8 36, @10 36, @20 39). Widening the window cannot reach
+# them -- keep_k=12 scored identically (36/40, MRR 0.6481) and keep_k=14 starts
+# dropping chunks -- so freeing repeat slots is the only remaining lever.
+DEFAULT_MAX_PER_SOURCE = _env_int("BRAIN_MAX_PER_SOURCE", 0)
+
+# Boost the reference notes on an ANALYTIC default-persona question. 0.0 keeps
+# the ranker exactly as it is, so this is inert until an arm sets it.
+#
+# Measured on the device 2026-08-16 over retrieval_gold: three of the four
+# in_context misses share one cause, and it is not the window. critical_period_1
+# (rank 11) wanted Core/Critical Period and Brain and got Parents FAQ, Ages 1 to
+# 3 and Choosing a Communication Approach; interpreting_access_2 (rank 11)
+# wanted US-Law/IDEA and CRPD/Article 24 and got the same two parent-facing
+# notes. The parent/FAQ register outranks the reference register on exactly the
+# questions that are asking for the reference register. The fourth, gallaudet_1
+# (rank 23), is a known bad row -- retrieval_gold flags its premise as off and
+# says the DMV school notes outrank the university note legitimately -- so the
+# real ceiling on this set is 37/40, not 40/40.
+#
+# The prefix table is deliberately the scholar one plus the two legal sources:
+# _apply_prefix_boost already exists for precisely this operation, and a second
+# copy of that loop would be a second place for the numbers to drift.
+DEFAULT_ANALYTIC_BOOST = 0.0
+try:
+    DEFAULT_ANALYTIC_BOOST = float(os.environ["BRAIN_ANALYTIC_BOOST"])
+except (KeyError, ValueError):
+    pass
+_REFERENCE_SOURCE_PREFIXES = _SCHOLAR_SOURCE_PREFIXES + ("US-Law/", "CRPD/")
 
 _WH_RE = re.compile(r"\b(how many|how much|where|when|who|whose|which|what|why|how)\b")
 
@@ -2329,6 +2362,16 @@ def format_web_context(excerpts):
 # safe side. The cost of overestimating is one dropped tail chunk; the cost of
 # underestimating is a silently ungrounded answer.
 CHARS_PER_TOKEN = 3.4
+# Measured on the device, 2026-08-16, over the 40 retrieval_gold prompts through
+# the real path, against Ollama's own prompt_eval_count (num_predict=1, so
+# prefill only): the true ratio is 4.25 min / 4.61 mean / 4.77 max. 3.4 is
+# therefore ~35% pessimistic, and the pessimism is not free -- it is spent
+# dropping tail chunks that would have fit. Overridable so an arm can be priced
+# without an edit; see BRAIN_TOP_K_FAST, whose ceiling was set by this estimator.
+try:
+    CHARS_PER_TOKEN = float(os.environ["BRAIN_CHARS_PER_TOKEN"])
+except (KeyError, ValueError):
+    pass
 # Leave room for the answer (num_predict) plus chat-template overhead, so the
 # guard trims before llama.cpp has to.
 CTX_RESERVE_TOKENS = 768
@@ -2959,6 +3002,12 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
     elif persona == "scholar":
         scores = _apply_prefix_boost(scores, chunks, _SCHOLAR_SOURCE_PREFIXES,
                                      SCHOLAR_BOOST)
+    elif DEFAULT_ANALYTIC_BOOST and intent == "analytic":
+        # Inert at the shipped 0.0. See DEFAULT_ANALYTIC_BOOST for the three
+        # measured misses this exists to reach.
+        scores = _apply_prefix_boost(scores, chunks,
+                                     _REFERENCE_SOURCE_PREFIXES,
+                                     DEFAULT_ANALYTIC_BOOST)
 
     # Per-sub-question BM25 rankings, fused with the whole-question ranking
     # below so a chunk answering ANY one part well can reach the context window.
@@ -3054,7 +3103,8 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                                          qvec_model=qvec_model)
             order_full = order
             tm["rerank"] = time.perf_counter() - _t
-        if order and (persona in ("parent", "scholar") or intent == "multi"):
+        if order and (persona in ("parent", "scholar") or intent == "multi"
+                      or DEFAULT_MAX_PER_SOURCE > 0):
             # A multi-entity question needs facts from several different notes,
             # and the boosts that make the FIRST entity rank well let its note
             # take every slot: "which was founded first, Gallaudet or the
@@ -3076,7 +3126,8 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                 order, chunks, keep_k,
                 PARENT_MAX_PER_SOURCE if persona == "parent"
                 else SCHOLAR_MAX_PER_SOURCE if persona == "scholar"
-                else MULTI_MAX_PER_SOURCE)
+                else MULTI_MAX_PER_SOURCE if intent == "multi"
+                else DEFAULT_MAX_PER_SOURCE)
         for i in order[:keep_k]:
             retrieved.append(chunks[i])
         if ranked:
