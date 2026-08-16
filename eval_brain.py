@@ -62,6 +62,20 @@ try:
 except Exception:
     AnswerCache = None
 
+# Footer marker plus its stripper, imported rather than restated, the same way
+# brain.py does it. The judge must grade the ANSWER BODY: the citation footer
+# is bare author/year/doi lines, not prose, so feeding it to the judge both
+# dilutes the per-fact read and lets a listed title be scored as an ASSERTED
+# must-not claim, which costs a full VIOLATION_PENALTY. If brain_depth is
+# missing there is no footer to remove and grading proceeds unchanged.
+try:
+    from brain_depth import CITE_SENTINEL, strip_citations as _strip_citations
+except Exception:      # brain_depth missing -> nothing to strip, grade as-is
+    CITE_SENTINEL = None
+
+    def _strip_citations(text):
+        return text or ""
+
 
 # -- config, mirrored from brain.py so the eval matches the deployed system ---
 OLLAMA_HOST = getattr(brain, "OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -540,6 +554,33 @@ def load_gold(path):
     return rows
 
 
+def load_answers(path):
+    """Read a saved --answers-out JSONL back into {id: row}.
+
+    Each row carries exactly id, question, answer, sources, served_by, which is
+    everything the judge and the provenance gate need and nothing the answerer
+    would have to be alive to supply. Tolerant like load_gold: blanks and
+    comments skipped, malformed rows noted on stderr. Never raises."""
+    rows = {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for n, line in enumerate(fh, 1):
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    sys.stderr.write("skipping malformed answer line " + str(n) + "\n")
+                    continue
+                if not isinstance(obj, dict) or not obj.get("id"):
+                    continue
+                rows[obj["id"]] = obj
+    except Exception as e:
+        sys.stderr.write("could not read --grade-only file: " + repr(e) + "\n")
+    return rows
+
+
 def preflight_judge(judge_model, host, timeout):
     """Confirm the judge model answers at all. Returns True/False.
 
@@ -606,6 +647,28 @@ def print_report(results, threshold, elapsed, gold_path, model, judge_model):
         print("Every question clears the bar. The brain answers these with dignity and fact.")
 
 
+def provenance_failure(args, results):
+    """True when --require-rag is on and something was not served by retrieval.
+
+    Same semantics whichever path produced the results: served_by is stored in
+    the --answers-out JSONL precisely so a re-grade cannot quietly launder a
+    cache hit into a retrieval score."""
+    if not args.require_rag:
+        return False
+    non_rag = [r for r in results if r.get("served_by") != "rag"]
+    if not non_rag:
+        return False
+    sys.stderr.write(
+        "PROVENANCE FAILURE: %d of %d answers were not served by retrieval.\n"
+        % (len(non_rag), len(results)))
+    for r in non_rag[:10]:
+        sys.stderr.write("  %-30s served_by=%s\n" % (r["id"], r.get("served_by")))
+    sys.stderr.write(
+        "  These scores do not measure the retrieval pipeline. Pass "
+        "--allow-cache-hits to grade them anyway.\n")
+    return True
+
+
 # -- main ---------------------------------------------------------------------
 def build_parser():
     p = argparse.ArgumentParser(
@@ -662,15 +725,24 @@ def build_parser():
     p.add_argument("--answers-out", default=None, metavar="PATH",
                    help="write the answers as JSONL so a re-grade never has to "
                         "re-generate (a judged battery costs ~900-1700s)")
+    # The other half of --answers-out, which was write-only until now: nothing
+    # read those files back, so every rubric edit re-paid the full generation
+    # battery. --grade-only re-judges a saved battery with no Brain, no
+    # load_index and no answerer, which also means it runs on a laptop that has
+    # neither the models nor the vault index.
+    p.add_argument("--grade-only", default=None, metavar="PATH",
+                   help="re-judge a saved --answers-out JSONL instead of generating "
+                        "(skips the index and the answerer entirely)")
     p.add_argument("--timeout", type=int, default=180, help="per-call timeout seconds")
     p.add_argument("--dry-run", action="store_true", help="list the plan, grade nothing")
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON report")
-    p.add_argument("--mode", choices=("default", "parent"), default="default",
-                   help="answer persona: parent = warm parent-guidance register")
+    p.add_argument("--mode", choices=("default", "parent", "scholar"), default="default",
+                   help="answer persona: parent = warm parent-guidance register, "
+                        "scholar = citation-bearing academic register")
     return p
 
 
-def env_fingerprint():
+def env_fingerprint(args):
     """Record which arm produced this artifact.
 
     eval_retrieval.py has carried one of these for a while; the judged harness
@@ -688,13 +760,48 @@ def env_fingerprint():
     The generation knobs matter here and nowhere else: eval_retrieval.py stops
     at retrieval, so num_ctx, num_predict and the context-fit budget are
     invisible to it. They are exactly the arms a judged run exists to price.
+
+    Persona and seed are recorded because they were not: a --mode default run
+    and a --mode parent run emitted BYTE-IDENTICAL headers, so no artifact
+    already sitting in eval_results/ can be attributed to a persona at all.
+    The persona is the resolved args.mode, i.e. what Brain was actually
+    constructed with, not an env default restated here.
+
+    The BRAIN_SCHOLAR_* flags are resolved off the module like every other arm.
+    They were env-only when brain.py had not defined them; brain.py now does
+    (SCHOLAR_PASS2/CITE/AUTO at 284-289, SCHOLAR_TOP_K/MAX_PER_SOURCE/
+    FACETS_N at 253/257/260), and BRAIN_SCHOLAR_CITE defaults to "1", so an
+    environ read of an unset variable would record null for the SHIPPED arm --
+    a null that is byte-identical to the null a run that never touched the flag
+    emits, and that reads as OFF next to the explicit "0" of a CITE-off arm.
+
+    env_explicit lists the fingerprinted variables actually present in the
+    process environment, so "unset, defaulted ON" stays distinguishable from
+    "explicitly set to 1" without duplicating every key.
     """
     def flag(v):
         return "1" if v else "0"
 
+    mod = globals().get("brain")
+
+    def resolved(attr, env_name, fmt=flag):
+        """The value the code WILL USE: brain's resolved constant when brain.py
+        defines it, the raw environment only as a fallback.
+
+        The fallback keeps this working if brain.py is older than the flag, or
+        if brain could not be imported far enough to define it. The test is
+        `is None`, not truthiness, precisely so a legitimate False/0 records as
+        "0" instead of silently falling through to the environment."""
+        v = getattr(mod, attr, None) if mod is not None else None
+        if v is None:
+            return os.environ.get(env_name)
+        return fmt(v)
+
     gen = getattr(brain, "GEN_OPTIONS", {}) or {}
-    return {
+    fp = {
         "index": os.environ.get("BRAIN_INDEX", brain.INDEX_PATH),
+        "persona": args.mode,
+        "seed": os.environ.get("BRAIN_SEED"),
         # Retrieval arms.
         "BRAIN_HYBRID": flag(brain.HYBRID_ENABLED),
         "BRAIN_HYDE": flag(brain.HYDE_ENABLED),
@@ -705,6 +812,19 @@ def env_fingerprint():
         "BRAIN_OBSIDIAN_BLOCKS": flag(brain.OBSIDIAN_BLOCKS_ENABLED),
         "BRAIN_SKILLS": flag(getattr(brain, "SKILLS_ENABLED", False)),
         "BRAIN_AUTOLEARN": flag(brain.AUTOLEARN_ENABLED),
+        # Scholar arms, resolved through brain.py's defaults. CITE defaults ON,
+        # so a raw environ read of an unset variable records null and loses the
+        # shipped arm. Note SCHOLAR_FACETS_N: the env var is BRAIN_SCHOLAR_FACETS
+        # but the module constant carries the _N suffix, and a wrong attribute
+        # name here would getattr to None and revive the bug as a fallback.
+        "BRAIN_SCHOLAR_PASS2": resolved("SCHOLAR_PASS2", "BRAIN_SCHOLAR_PASS2"),
+        "BRAIN_SCHOLAR_CITE": resolved("SCHOLAR_CITE", "BRAIN_SCHOLAR_CITE"),
+        "BRAIN_SCHOLAR_AUTO": resolved("SCHOLAR_AUTO", "BRAIN_SCHOLAR_AUTO"),
+        "BRAIN_SCHOLAR_TOP_K": resolved("SCHOLAR_TOP_K", "BRAIN_SCHOLAR_TOP_K", str),
+        "BRAIN_SCHOLAR_MAX_PER_SOURCE": resolved(
+            "SCHOLAR_MAX_PER_SOURCE", "BRAIN_SCHOLAR_MAX_PER_SOURCE", str),
+        "BRAIN_SCHOLAR_FACETS": resolved(
+            "SCHOLAR_FACETS_N", "BRAIN_SCHOLAR_FACETS", str),
         # Generation arms -- judged-only territory.
         "num_ctx": gen.get("num_ctx"),
         "num_predict": gen.get("num_predict"),
@@ -713,6 +833,91 @@ def env_fingerprint():
         "CTX_RESERVE_TOKENS": getattr(brain, "CTX_RESERVE_TOKENS", None),
         "CHARS_PER_TOKEN": getattr(brain, "CHARS_PER_TOKEN", None),
     }
+    # Which of the above the operator actually exported. Everything else in this
+    # dict is now an EFFECTIVE value, so without this an arm that relied on the
+    # default is indistinguishable from one that typed the default out.
+    fp["env_explicit"] = sorted(
+        k for k in list(fp) + ["BRAIN_INDEX", "BRAIN_SEED"]
+        if k.startswith("BRAIN_") and k in os.environ)
+    return fp
+
+
+def grade_only(args, gold, run_judge, start):
+    """Re-judge a saved --answers-out battery. No Brain, no load_index, no
+    answerer model: only the judge runs.
+
+    This is the point of the flag. Generating a judged battery costs 900-1700s,
+    so every rubric edit used to re-pay for answers that had not changed, and
+    the arms could only be re-scored on the Jetson itself. Reading the JSONL
+    back means a rubric change costs judge time alone, on any machine.
+
+    The --require-rag PRE-gate is skipped here on purpose: it inspects live
+    cache and semantic-router state that does not exist in this mode. The
+    POST-gate still runs, on the served_by recorded when the answers were
+    generated, so provenance is enforced exactly as strictly as before."""
+    answers = load_answers(args.grade_only)
+    if not answers:
+        sys.stderr.write("no answers to re-grade in " + args.grade_only + "\n")
+        return 2
+
+    if not preflight_judge(args.judge_model, args.host, min(60, args.timeout)):
+        sys.stderr.write(
+            "judge model " + args.judge_model + " is not answering at " + args.host
+            + ". Is Ollama running and the model pulled?\n")
+        return 4
+
+    if not args.as_json:
+        print("Grade-only: re-judging %d saved answer(s) from %s (no index, no answerer)."
+              % (len(answers), args.grade_only))
+
+    results = []
+    unanswered = []
+    for i, g in enumerate(gold, 1):
+        row = answers.get(g["id"])
+        if row is None:
+            # A gold row with no saved answer is a HOLE IN THE ARTIFACT, not a
+            # wrong answer. Scoring it 0 would drag the mean down and read as a
+            # quality regression, so it is reported and left out of the scores.
+            unanswered.append(g["id"])
+            continue
+        answer = row.get("answer") or ""
+        sources = list(row.get("sources") or [])
+        served_by = row.get("served_by") or "unknown"
+        score, missing, errors, _raw = run_judge(g, answer)
+        results.append({
+            "id": g["id"], "question": g["question"], "score": score,
+            "served_by": served_by, "missing": missing, "errors": errors,
+            "answer_preview": answer[:200], "n_sources": len(sources),
+            "sources": sources,
+            # The saved JSONL carries no timings: the answer was generated in
+            # some other run. None says "not measured here" rather than 0.0,
+            # which would read as an impossibly fast answer.
+            "answer_seconds": None,
+            "timing": {},
+        })
+        if not args.as_json:
+            tag = "PASS" if score >= args.threshold else ("JUDGE?" if score < 0 else "FAIL")
+            print("  [%2d/%2d] %-6s %4s  %s" % (
+                i, len(gold), tag, ("n/a" if score < 0 else str(score)), g["id"]))
+
+    if unanswered:
+        sys.stderr.write(
+            "%d gold question(s) have no answer in %s and were NOT scored: %s\n"
+            % (len(unanswered), args.grade_only, ", ".join(unanswered[:10])))
+    if not results:
+        sys.stderr.write("no gold id matched any saved answer; nothing to grade\n")
+        return 2
+
+    if provenance_failure(args, results):
+        return 4
+
+    # --report-gaps needs the vault index to count chunks, and this mode
+    # deliberately never loads one. Say so instead of silently reporting none.
+    if args.report_gaps and not args.as_json:
+        print("(--report-gaps needs the vault index, which --grade-only does not load)")
+
+    elapsed = time.time() - start
+    return emit_and_verdict(args, results, [], elapsed)
 
 
 def main():
@@ -733,6 +938,31 @@ def main():
         for g in gold:
             print("  - " + g["id"] + ": " + g["question"][:72])
         return 0
+
+    # Defined before the brain is touched so --grade-only can borrow it: the
+    # judging rules must be one piece of code, or a re-grade stops being
+    # comparable to the run it re-grades.
+    def run_judge(g, answer):
+        # Grade the body only. The citation footer that brain.py appends when
+        # BRAIN_SCHOLAR_CITE is on is metadata, and grading it penalises every
+        # CITE-on arm against an otherwise byte-identical CITE-off arm. This is
+        # the one chokepoint every path funnels through (live single-pass, live
+        # two-phase, --grade-only), and it is deliberately NOT applied at the
+        # ask() call sites: the saved answers file must keep its footer so a
+        # re-grade and the footer-quality checks stay possible.
+        answer = _strip_citations(answer)
+        if args.isolate:
+            return judge_isolated(
+                g["question"], answer, g.get("must_cover", []), g.get("must_not", []),
+                args.judge_model, args.host, args.retries, args.timeout)
+        return judge(
+            g["question"], answer, g.get("must_cover", []), g.get("must_not", []),
+            args.judge_model, args.host, args.retries, args.timeout, args.judge_votes)
+
+    # Re-grade a saved battery: no index, no answerer, no models beyond the
+    # judge. Returns before any of the setup below runs.
+    if args.grade_only:
+        return grade_only(args, gold, run_judge, start)
 
     # Optional semantic concept-router (widens coverage past lexical overlap).
     semantic = None
@@ -790,15 +1020,6 @@ def main():
 
     if not args.as_json:
         print("Grading " + str(len(gold)) + " question(s). Answer then judge, one at a time.")
-
-    def run_judge(g, answer):
-        if args.isolate:
-            return judge_isolated(
-                g["question"], answer, g.get("must_cover", []), g.get("must_not", []),
-                args.judge_model, args.host, args.retries, args.timeout)
-        return judge(
-            g["question"], answer, g.get("must_cover", []), g.get("must_not", []),
-            args.judge_model, args.host, args.retries, args.timeout, args.judge_votes)
 
     results = []
     # Full answer text, kept separately because results[] stores only a 200-char
@@ -869,7 +1090,6 @@ def main():
                     i, len(gold), tag, ("n/a" if score < 0 else str(score)), g["id"]))
 
     elapsed = time.time() - start
-    failed = [r for r in results if r["score"] < args.threshold]
 
     # Write answers BEFORE any early return below, so an expensive battery that
     # trips a guard is still re-gradable without regenerating it.
@@ -886,18 +1106,8 @@ def main():
     # The configuration gate above rejects flags that PERMIT a cache hit; this
     # one catches an answer that actually came from somewhere other than
     # retrieval, whatever the flags claimed.
-    if args.require_rag:
-        non_rag = [r for r in results if r.get("served_by") != "rag"]
-        if non_rag:
-            sys.stderr.write(
-                "PROVENANCE FAILURE: %d of %d answers were not served by retrieval.\n"
-                % (len(non_rag), len(results)))
-            for r in non_rag[:10]:
-                sys.stderr.write("  %-30s served_by=%s\n" % (r["id"], r.get("served_by")))
-            sys.stderr.write(
-                "  These scores do not measure the retrieval pipeline. Pass "
-                "--allow-cache-hits to grade them anyway.\n")
-            return 4
+    if provenance_failure(args, results):
+        return 4
 
     gaps = report_gaps(results, the_brain) if args.report_gaps else []
     if gaps and not args.as_json:
@@ -919,10 +1129,22 @@ def main():
             print("  Every missed fact is well covered in the vault; these are")
             print("  retrieval or generation failures, not content gaps.")
 
+    return emit_and_verdict(args, results, gaps, elapsed)
+
+
+def emit_and_verdict(args, results, gaps, elapsed):
+    """Print the report (JSON or human) and return the process exit code.
+
+    Shared by the generating run and by --grade-only so both emit the SAME
+    artifact shape: an arm re-graded from saved answers has to be diffable
+    against an arm that generated them, and it is not if the two paths write
+    different keys. The guard sequence below is unchanged; it lives here so
+    there is exactly one copy of it."""
+    failed = [r for r in results if r["score"] < args.threshold]
     if args.as_json:
         print(json.dumps({
             "gold": args.gold, "model": args.model, "judge": args.judge_model,
-            "env": env_fingerprint(),
+            "env": env_fingerprint(args),
             "threshold": args.threshold, "results": results, "gaps": gaps,
             "passed": len([r for r in results if r["score"] >= args.threshold]),
             "failed": len([r for r in results if 0 <= r["score"] < args.threshold]),

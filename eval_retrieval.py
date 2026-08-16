@@ -39,6 +39,27 @@ import brain
 
 KS = (1, 3, 5, 8, 10, 20)
 
+# Personas retrieve_context() actually understands. row["persona"] is passed
+# straight through with no validation, so a typo or a half-wired persona runs
+# clean and emits default-identical numbers under a header that looks correct.
+# Warn loudly, never hard-fail: a genuinely new persona must still be runnable
+# here before it is whitelisted.
+KNOWN_PERSONAS = ("default", "parent", "scholar")
+
+# The language-deprivation corpus, by source-path prefix. Breadth over this
+# subset is the thing the diversification work moves, so it lives in one
+# greppable place instead of being spelled out at the call site. Values are
+# pre-normalized through norm() at use time, so write them as they appear in
+# the vault. Gulati 2018 alone is 58 of the 85 chunks under
+# "Sources/Language Deprivation/", which is why a single source can dominate
+# an entire retrieval window without any single-source metric noticing.
+LD_SOURCE_PREFIXES = (
+    "Sources/Language Deprivation/",
+    "LanguageDeprivationAgent/Core/",
+    "Concepts/Language Deprivation",
+    "People/Wyatte C. Hall",
+)
+
 
 def load_gold(path):
     """Read labeled questions, skipping unlabeled ones loudly rather than
@@ -80,12 +101,28 @@ def norm(path):
     return (path or "").strip().lstrip("./").lower()
 
 
+_LD_PREFIXES_NORM = tuple(norm(p) for p in LD_SOURCE_PREFIXES)
+
+
+def is_ld_source(src):
+    """True when a source path sits under the language-deprivation corpus."""
+    return norm(src).startswith(_LD_PREFIXES_NORM)
+
+
 def score_one(row, bm25, chunks, meta):
     q = row["question"]
     expect = {norm(p) for p in row["expect_sources"]}
+    persona = row.get("persona", "default")
+    if persona not in KNOWN_PERSONAS:
+        sys.stderr.write(
+            "!!! WARNING: row %r requests persona %r, which is not one of %s. "
+            "retrieve_context() does NOT validate persona, so this run will "
+            "silently behave like 'default' and its numbers are NOT evidence "
+            "that %r works.\n"
+            % (row.get("id", "?"), persona, "/".join(KNOWN_PERSONAS), persona))
+        sys.stderr.flush()
     t0 = time.perf_counter()
-    r = brain.retrieve_context(q, bm25, chunks, meta,
-                               persona=row.get("persona", "default"))
+    r = brain.retrieve_context(q, bm25, chunks, meta, persona=persona)
     elapsed = time.perf_counter() - t0
 
     # rank comes from the PRE-diversify ranking. _diversify_order returns at
@@ -119,6 +156,23 @@ def score_one(row, bm25, chunks, meta):
         context_chunks = context_chunks + obsidian_added
     in_ctx_expanded = {norm(c.get("source")) for c in context_chunks}
 
+    # Breadth metrics, all label-free except the last. These exist because
+    # in_context is an OR over expect_sources and rank reads only the FIRST
+    # match, so both are already pinned at ceiling on the multi-source
+    # language-deprivation rows and cannot see a diversification change at all.
+    #
+    # Computed off the PRE-expansion retrieved set (r["retrieved"], the same set
+    # in_ctx is built from), not the post-expansion one, because that is the set
+    # retrieve_context/_diversify_order actually controls -- link and obsidian
+    # expansion run afterwards and would add breadth that no retrieval arm is
+    # responsible for. n_distinct_sources_expanded is emitted alongside as the
+    # cheap post-expansion sibling of in_context_expanded.
+    per_source = {}
+    for c in r["retrieved"]:
+        s = norm(c.get("source"))
+        if s:
+            per_source[s] = per_source.get(s, 0) + 1
+
     rank = None
     for i, src in enumerate(ranked, 1):
         if norm(src) in expect:
@@ -131,6 +185,15 @@ def score_one(row, bm25, chunks, meta):
         "rank": rank,
         "in_context": bool(expect & in_ctx),
         "in_context_expanded": bool(expect & in_ctx_expanded),
+        "n_distinct_sources": len(per_source),
+        "n_distinct_sources_expanded": len({s for s in in_ctx_expanded if s}),
+        "n_ld_sources": sum(1 for s in per_source if is_ld_source(s)),
+        # THE key metric: how many retrieved chunks come from the single most
+        # dominant source. Falling is the evidence diversification worked.
+        "max_chunks_one_source": (max(per_source.values()) if per_source else 0),
+        # The COUNT of covered expect_sources, next to in_context's boolean OR.
+        "n_expected_covered": len(expect & in_ctx),
+        "n_expected": len(expect),
         "keep_k": keep_k,
         "intent": r["intent"],
         "mode": r["mode"],
@@ -159,6 +222,13 @@ def aggregate(results):
         "found_anywhere": len(found),
         "median_rank": (sorted(found)[len(found) // 2] if found else None),
     }
+    # Breadth means. Reported as means (not counts) so two arms with different
+    # question sets are still directly comparable, and so a drop in
+    # mean_max_chunks_one_source reads as "the window stopped being one note".
+    for key in ("n_distinct_sources", "n_distinct_sources_expanded",
+                "n_ld_sources", "max_chunks_one_source", "n_expected_covered"):
+        agg["mean_%s" % key] = round(
+            sum(r.get(key) or 0 for r in results) / float(n), 3)
     for k in KS:
         agg["recall@%d" % k] = sum(1 for x in found if x <= k)
     return agg
@@ -170,8 +240,16 @@ def _flag(value):
     return "1" if value else "0"
 
 
-def env_fingerprint(meta, chunks):
+def env_fingerprint(meta, chunks, rows=None):
     dense = meta.get("dense") or {}
+    # Personas actually exercised by this run, read off the gold rows rather
+    # than off the environment. The header recorded 16 keys and NEITHER of the
+    # two things that most easily make two runs differ invisibly: retrieve_context
+    # takes persona per row with no whitelist, so a misspelled persona produced
+    # default-identical numbers under a byte-identical header. (retrieval_gold.jsonl
+    # carries zero persona keys today, so this reads "default" until rows add one.)
+    personas = sorted({(r.get("persona") or "default") for r in (rows or [])}) \
+        or ["default"]
     # _prep_dense rewrites the block, so the post-load row count lives in "n" /
     # "rows_idx", never in the build-time "ids" key. Reading "ids" here reported
     # 0 dense rows on a fully embedded index.
@@ -212,6 +290,18 @@ def env_fingerprint(meta, chunks):
         # byte-identical headers under different settings.
         "BRAIN_OBSIDIAN_BLOCKS": _flag(brain.OBSIDIAN_BLOCKS_ENABLED),
         "BRAIN_AUTOLEARN": _flag(brain.AUTOLEARN_ENABLED),
+        # Personas exercised by this run's gold rows, so a persona arm can never
+        # again be mistaken for a default arm from the header alone.
+        "persona": ",".join(personas),
+        # Two different seeds, both previously unrecorded. BRAIN_SEED pins the
+        # sampler and so does not touch this harness's numbers (no LLM in the
+        # loop) but does pin the eval_brain.py runs an artifact gets compared
+        # against; BRAIN_ANN_SEED pins _build_ivf's k-means and therefore CAN
+        # move retrieval whenever BRAIN_ANN=1. Read off the brain module for the
+        # same reason the arms above are: it is what the code WILL DO.
+        "seed": (str(brain.GEN_OPTIONS["seed"])
+                 if "seed" in brain.GEN_OPTIONS else None),
+        "BRAIN_ANN_SEED": str(brain.ANN_SEED),
     }
 
 
@@ -233,7 +323,7 @@ def main():
         return 2
 
     chunks, bm25, meta = brain.load_index()
-    fp = env_fingerprint(meta, chunks)
+    fp = env_fingerprint(meta, chunks, rows)
 
     if os.environ.get("BRAIN_AUTOLEARN", "1") not in ("0", "false", "False", "no"):
         sys.stderr.write(
@@ -249,6 +339,8 @@ def main():
           % (fp["BRAIN_HYBRID"], fp["BRAIN_DECOMPOSE"], fp["BRAIN_HYDE"],
              fp["BRAIN_TOP_K_FAST"], fp["BRAIN_ANN"],
              fp["BRAIN_OBSIDIAN_RANK"], fp["BRAIN_OBSIDIAN_BLOCKS"]))
+    print("persona=%s seed=%s ann_seed=%s"
+          % (fp["persona"], fp["seed"], fp["BRAIN_ANN_SEED"]))
     if skipped:
         print("skipped %d unlabeled: %s" % (len(skipped), ", ".join(skipped[:6])
                                             + (" ..." if len(skipped) > 6 else "")))
@@ -278,6 +370,13 @@ def main():
     print("recall@k  " + "  ".join(
         "@%d=%d" % (k, agg["recall@%d" % k]) for k in KS))
     print("found anywhere in ranking: %d/%d" % (agg["found_anywhere"], agg["n"]))
+    print("breadth   sources/q=%.2f (expanded %.2f)  LD sources/q=%.2f  "
+          "max chunks from one source=%.2f  expected covered/q=%.2f"
+          % (agg["mean_n_distinct_sources"],
+             agg["mean_n_distinct_sources_expanded"],
+             agg["mean_n_ld_sources"],
+             agg["mean_max_chunks_one_source"],
+             agg["mean_n_expected_covered"]))
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as fh:
