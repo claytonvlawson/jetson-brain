@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py brain_skills.py brain_ollama_shim.py brain-ollama-shim.service escalate.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py test_obsidian_blocks.py test_brain_skills.py test_brain_skills_connections.py test_ollama_shim.py test_hyde.py test_ctx_fit.py test_embed_prefix.py; do
+for f in brain.py brain_ui.py answer_cache.py web_cache.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py score_depth.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl depth_gold.jsonl depth_retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py brain_skills.py brain_depth.py brain_ollama_shim.py brain-ollama-shim.service escalate.py test_brain_depth.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py test_obsidian_blocks.py test_brain_skills.py test_brain_skills_connections.py test_ollama_shim.py test_hyde.py test_ctx_fit.py test_embed_prefix.py; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -98,6 +98,7 @@ scp -q \
   "${HERE}/prime_cache.py" \
   "${HERE}/eval_brain.py" \
   "${HERE}/eval_retrieval.py" \
+  "${HERE}/score_depth.py" \
   "${HERE}/gold_questions.jsonl" \
   "${HERE}/heldout_gold.jsonl" \
   "${HERE}/parent_gold.jsonl" \
@@ -105,6 +106,8 @@ scp -q \
   "${HERE}/factual_gold.jsonl" \
   "${HERE}/multihop_gold.jsonl" \
   "${HERE}/retrieval_gold.jsonl" \
+  "${HERE}/depth_gold.jsonl" \
+  "${HERE}/depth_retrieval_gold.jsonl" \
   "${HERE}/install.sh" \
   "${HERE}/requirements.txt" \
   "${HERE}/jetson-online.sh" \
@@ -137,6 +140,7 @@ scp -q \
   "${HERE}/obsidian_rank.py" \
   "${HERE}/export_obsidian_vectors.py" \
   "${HERE}/brain_skills.py" \
+  "${HERE}/brain_depth.py" \
   "${HERE}/brain_ollama_shim.py" \
   "${HERE}/brain-ollama-shim.service" \
   "${HERE}/escalate.py" \
@@ -149,6 +153,7 @@ scp -q \
   "${HERE}/test_obsidian_expand.py" \
   "${HERE}/test_web_semantic.py" \
   "${HERE}/test_obsidian_blocks.py" \
+  "${HERE}/test_brain_depth.py" \
   "${HERE}/test_brain_skills.py" \
   "${HERE}/test_brain_skills_connections.py" \
   "${HERE}/test_ollama_shim.py" \

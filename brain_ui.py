@@ -363,6 +363,13 @@ class UI:
             Stage("bm25", "BM25 retrieve", "Retrieving", "Retrieval"),
             Stage("expand", "Wikilink expand", "Expanding links", "Retrieval"),
             Stage("model", model, "Consulting " + _short_model(model), "Generation"),
+            # The scholar persona's second pass is a whole extra generation
+            # (~30-45s) with streaming forced off, so without a registered
+            # stage the user watches a frozen spinner for the duration. Note
+            # that Run.by_key makes an UNregistered key a silent no-op: that is
+            # why run.done("obsidian") and run.done("skills") already print
+            # nothing today. A stage must be listed here to exist at all.
+            Stage("depth", "Depth pass", "Re-retrieving missed facets", "Generation"),
             Stage("web", "Web fallback", "Fetching web", "Generation"),
         ]
         return Run(self, stages)

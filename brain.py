@@ -174,6 +174,17 @@ def _env_int(name, default, lo=1, hi=64):
         return default
 
 
+def _env_flag(name, default="0"):
+    """Env override for a boolean feature flag, using the SAME truthiness table
+    the hand-rolled flags in this file already use (BRAIN_HYDE, BRAIN_CTX_FIT,
+    BRAIN_STREAM_PHASE1). Written once because every scholar flag below ships
+    DEFAULT OFF and has to be flippable per eval arm: a second truthiness
+    convention is exactly how an ablation ends up reporting an arm it never
+    actually enabled. The empty string counts as OFF, since an env var exported
+    with no value means "unset" to every shell that produced it."""
+    return os.environ.get(name, default) not in ("0", "false", "False", "no", "")
+
+
 TOP_K_FAST = _env_int("BRAIN_TOP_K_FAST", TOP_K_FAST)
 TOP_K_DEEP = _env_int("BRAIN_TOP_K_DEEP", TOP_K_DEEP)
 
@@ -211,6 +222,100 @@ PARENT_TOP_K = _env_int("BRAIN_PARENT_TOP_K", 8)
 # displacing exactly those (national_orgs 100 -> 50). With TOP_K 8 a cap of 3
 # still forces at least three distinct source notes into context.
 PARENT_MAX_PER_SOURCE = _env_int("BRAIN_PARENT_MAX_PER_SOURCE", 3)
+
+# ---- Scholar persona ------------------------------------------------------
+# Third persona alongside default and parent. Its depth comes from RETRIEVAL
+# BREADTH and a bounded second pass, never from prompting: the system prompt is
+# byte-identical to the default persona's (see _shape_for_intent below), because
+# a "prefer specifics, name every source" instruction on a 3B model is a
+# citation-fabrication generator aimed at exactly the output class
+# faithfulness_flags (two substring regexes) cannot see.
+#
+# 2.0, not PARENT_BOOST's 3.0: the parent boost has to beat dense academic notes
+# that share more query words, while the scholar boost is pushing academic notes
+# that ALREADY rank well on an academic question a little further up. Same
+# additive shape, applied to BM25 before fusion/rerank, so both retrieval paths
+# inherit it.
+SCHOLAR_BOOST = 2.0
+# The four prefixes that hold the language-deprivation literature. Verified
+# against depth_retrieval_gold.jsonl, whose 8 labeled facets resolve entirely
+# into "Sources/Language Deprivation/" and "LanguageDeprivationAgent/Core/".
+_SCHOLAR_SOURCE_PREFIXES = ("Sources/Language Deprivation/",
+                            "LanguageDeprivationAgent/Core/",
+                            "Concepts/Language Deprivation",
+                            "People/Wyatte C. Hall")
+
+# 10, not 12. A depth question already sends the widest prompts in the system:
+# at keep_k=12 half the LD battery lands over the 7,424-token budget at
+# num_ctx=8192, and fit_context trims from the TAIL, so the widened window buys
+# chunks that are dropped again before the model sees them. 10 is the largest
+# window measured to survive the budget on this question set.
+SCHOLAR_TOP_K          = _env_int("BRAIN_SCHOLAR_TOP_K", 10)
+# 2, not PARENT_MAX_PER_SOURCE's 3: a depth answer is scored on how many
+# distinct facets it discusses, so the cap exists to force distinct notes into
+# the window. At keep_k=10 a cap of 2 guarantees at least five source notes.
+SCHOLAR_MAX_PER_SOURCE = _env_int("BRAIN_SCHOLAR_MAX_PER_SOURCE", 2)
+# Facets pursued by the second pass. Each one costs a retrieval round trip
+# inside the deadline; the reconciling generation is a single call regardless.
+SCHOLAR_FACETS_N       = _env_int("BRAIN_SCHOLAR_FACETS", 2, lo=1, hi=4)
+# New chunks admitted per facet. Three is the smallest number that can carry a
+# fact plus its surrounding claim; more crowds the reconciling prompt, which
+# only ever sees the draft plus these chunks (never the pass-1 union).
+SCHOLAR_FACET_CHUNKS   = 3
+# Wall clock for the facet retrieval loop. Checked BETWEEN facets only, which is
+# why chat_once grew a real timeout: without one the deadline cannot interrupt
+# an in-flight generation and is decoration.
+SCHOLAR_DEADLINE_S     = 60.0
+
+# Each scholar addition was priced on its own arm against depth_gold (10 rows,
+# temperature 0, seed 42) and ships ON only if it paid.
+#
+# PASS2 ships OFF. Measured: it carried 63% more sources than the default arm
+# (12.9 vs 7.9) for no depth gain -- absolute facets covered went 4.70 -> 4.80,
+# inside noise -- at +16s/turn (44.2s vs 27.8s), and it is what pushed the 8GB
+# board into the OOM killer. Retrieval breadth demonstrably works here (LD
+# sources/q 4.00 -> 5.12, max-chunks-from-one-source 2.12 -> 2.00); the 3B just
+# spreads thinner over it rather than going deeper. Kept, not deleted: the
+# footer rides on this persona and a larger answerer may yet use the breadth.
+#
+# CITE ships ON. It is the one intervention that moved a number: frontmatter-
+# verified DOIs 0.00 -> 2.75 per answer with ungrounded_specifics staying at
+# 0.00, i.e. real citations and zero fabrication. It costs no model call.
+SCHOLAR_PASS2 = _env_flag("BRAIN_SCHOLAR_PASS2", "0")
+SCHOLAR_CITE  = _env_flag("BRAIN_SCHOLAR_CITE",  "1")
+# Defined, wired to NOTHING. The auto-detect hook below is unreached on purpose:
+# promoting a question to scholar automatically is a change to what the DEFAULT
+# persona does, and that only happens after an ablation prices it.
+SCHOLAR_AUTO  = _env_flag("BRAIN_SCHOLAR_AUTO",  "0")
+
+# Footer marker, imported rather than restated: the scorer, the judge and any
+# ablation all strip the citation block with brain_depth's single constant, and
+# a second copy here is how the two silently diverge.
+try:
+    from brain_depth import CITE_SENTINEL
+except Exception:      # brain_depth missing -> the citation footer is unavailable
+    CITE_SENTINEL = None
+
+# Vault root, for the frontmatter reads the citation footer needs. Same
+# BRAIN_VAULT override review_qa.py and research_agent.py already use.
+SCHOLAR_VAULT_DIR = os.environ.get("BRAIN_VAULT", os.path.join(BRAIN_ROOT, "vault"))
+
+# Facet seeds used ONLY when the wikilink graph yields nothing (an old v1 index
+# has links_out={}). Not a topic table for the normal path: facets come from
+# meta["links_out"], the same map expand_with_links consumes, so they stay
+# correct as the vault grows. These eight are the labeled facet notes from
+# depth_retrieval_gold.jsonl, so the fallback is measured rather than guessed.
+LD_FALLBACK_FACETS = (
+    "LanguageDeprivationAgent/Core/What Is Language Deprivation.md",
+    "LanguageDeprivationAgent/Core/Critical Period and Brain.md",
+    "LanguageDeprivationAgent/Core/Mental Health and Public Health.md",
+    "LanguageDeprivationAgent/Core/Bilingual Bimodal Protective Factors.md",
+    "LanguageDeprivationAgent/Core/Cochlear Implant Pathways and Risk.md",
+    "LanguageDeprivationAgent/Core/CRPD Article 24 and Sign Language Peoples.md",
+    "LanguageDeprivationAgent/Core/Research Gaps.md",
+    "Sources/Language Deprivation/Hall Levin Anderson 2017 - Language Deprivation Syndrome.md",
+)
+_LD_FALLBACK_SEED = "__ld_fallback__"
 
 # Query-time semantic rerank of BM25 candidates. After BM25 + section boost, the
 # top hit is often a dense secondary note that merely repeats query words while
@@ -1160,28 +1265,42 @@ def _apply_section_boost(scores, chunks, qtok):
     return boosted if boosted is not None else scores
 
 
-def _apply_parent_boost(scores, chunks):
-    """Add PARENT_BOOST to chunks from the curated parent-guidance notes.
-    Only called in parent persona; returns scores unchanged when nothing
-    matches (e.g. the vault has no parent notes)."""
+def _apply_prefix_boost(scores, chunks, prefixes, boost):
+    """Add `boost` to the score of every chunk whose source starts with one of
+    `prefixes`. Returns `scores` UNCHANGED (the same object) when nothing
+    matches, which is what keeps a persona that owns no notes free.
+
+    Generalized out of _apply_parent_boost when the scholar persona needed the
+    identical operation over a different prefix table. Deliberately a refactor
+    rather than a copy: the parent numbers are already measured, and a second
+    copy of this loop is a second place for them to drift."""
     if not len(scores):
         return scores
     boosted = None
     for i, c in enumerate(chunks):
         src = str(c.get("source") or "")
-        if src.startswith(_PARENT_SOURCE_PREFIXES):
+        if src.startswith(prefixes):
             if boosted is None:
                 boosted = list(scores)
-            boosted[i] += PARENT_BOOST
+            boosted[i] += boost
     return boosted if boosted is not None else scores
+
+
+def _apply_parent_boost(scores, chunks):
+    """Add PARENT_BOOST to chunks from the curated parent-guidance notes.
+    Only called in parent persona; returns scores unchanged when nothing
+    matches (e.g. the vault has no parent notes)."""
+    return _apply_prefix_boost(scores, chunks, _PARENT_SOURCE_PREFIXES,
+                               PARENT_BOOST)
 
 
 def _diversify_order(order, chunks, keep_k, max_per_source):
     """Return up to keep_k chunk ids from `order`, keeping at most
     max_per_source chunks from any one source note and backfilling from the
-    remaining ids in ranked order when the cap leaves slots open. Parent
-    persona only: its rubric questions need facts from several different
-    notes, and one long boosted note can otherwise fill every slot."""
+    remaining ids in ranked order when the cap leaves slots open. Used by the
+    parent and scholar personas and by every multi-intent question: those all
+    need facts from several different notes, and one long boosted note can
+    otherwise fill every slot."""
     picked, overflow, counts = [], [], {}
     for i in order:
         src = str((chunks[i] or {}).get("source") or "")
@@ -1584,7 +1703,7 @@ def list_models():
     return names
 
 
-def chat_once(model, messages, options=None):
+def chat_once(model, messages, options=None, force_rest=False, timeout=None):
     """Non-streaming chat. Returns the full text, or an error string prefixed
     with '[error]' so callers can detect failure without a crash.
 
@@ -1594,21 +1713,30 @@ def chat_once(model, messages, options=None):
     num_predict (brain_skills.SELECT_GEN_OPTIONS) while the answer calls keep
     the 0.2 default. (Rejected: swapping the GEN_OPTIONS global around the call
     - the UI animator runs on its own thread, so a mutated global is a race.)
+
+    `force_rest` and `timeout` both default to inert. They exist for the scholar
+    second pass, which runs under a wall-clock deadline: the ollama client path
+    below takes NO timeout at all, so a stalled generation there is unbounded and
+    SCHOLAR_DEADLINE_S -- checked only between facets -- cannot interrupt it.
+    force_rest=True skips straight to the requests path, where a timeout is a
+    real one; timeout overrides that path's 120s default. Every pre-existing
+    call site passes neither and gets the exact same two-path behaviour.
     """
     _opts = options if options is not None else GEN_OPTIONS
-    try:
-        import ollama
-        _ka = _keep_alive(model)
-        resp = ollama.chat(model=model, messages=messages, stream=False, options=_opts, keep_alive=_ka)
-        _capture_chat_stats(resp)
-        msg = resp.get("message") if isinstance(resp, dict) else getattr(resp, "message", None)
-        if isinstance(msg, dict):
-            return msg.get("content", "") or ""
-        content = getattr(msg, "content", None)
-        if content is not None:
-            return content
-    except Exception:
-        pass
+    if not force_rest:
+        try:
+            import ollama
+            _ka = _keep_alive(model)
+            resp = ollama.chat(model=model, messages=messages, stream=False, options=_opts, keep_alive=_ka)
+            _capture_chat_stats(resp)
+            msg = resp.get("message") if isinstance(resp, dict) else getattr(resp, "message", None)
+            if isinstance(msg, dict):
+                return msg.get("content", "") or ""
+            content = getattr(msg, "content", None)
+            if content is not None:
+                return content
+        except Exception:
+            pass
 
     # REST fallback.
     try:
@@ -1616,7 +1744,7 @@ def chat_once(model, messages, options=None):
         resp = requests.post(
             OLLAMA_HOST + "/api/chat",
             json={"model": model, "messages": messages, "stream": False, "options": _opts, "keep_alive": _keep_alive(model)},
-            timeout=120,
+            timeout=(120 if timeout is None else timeout),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -2510,10 +2638,20 @@ def _short_srcs(sources, n=3):
     return ", ".join(names) + tail
 
 
-def _finish(run, history, question, answer, sources):
-    """Common tail: append to history, print the sources branch, return."""
+def _finish(run, history, question, answer, sources, history_text=None):
+    """Common tail: append to history, print the sources branch, return.
+
+    `history_text` stores something OTHER than the returned answer in history,
+    and defaults to None so every existing caller is unchanged. It exists for
+    the scholar second pass: a merged two-pass answer plus a citation footer is
+    roughly 1,600 estimated tokens, a fifth of the 7,424-token budget, and
+    PHASE1_HISTORY_MSGS carries it into the NEXT question's prefill where
+    fit_context pays for it by dropping retrieval chunks from the tail. The
+    pass-1 draft is the part of the turn worth remembering; the expansion and
+    the citations are for the reader."""
     history.append({"role": "user", "content": question})
-    history.append({"role": "assistant", "content": answer})
+    history.append({"role": "assistant",
+                    "content": answer if history_text is None else history_text})
     trim_history(history)
     run.sources(sources, vault_name=VAULT_NAME)
     return answer, sources
@@ -2759,7 +2897,8 @@ def _shape_for_intent(system_prompt, intent):
 
 
 def retrieve_context(question, bm25, chunks, meta, model=None,
-                     persona="default", tm=None, qvec=None, qvec_model=None):
+                     persona="default", tm=None, qvec=None, qvec_model=None,
+                     hyde=None):
     """Run the retrieval half of a turn and return the ordered chunks.
 
     Extracted verbatim from _handle_question_impl so the retrieval eval harness
@@ -2769,9 +2908,19 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
 
     Returns a dict with keys: intent, wh, qtok, scores, order, keep_k,
     retrieved, mode, top_score, n_subq. `tm` is filled in place when given.
+
+    `hyde` defaults to None, meaning "use the HYDE_ENABLED module global" --
+    i.e. exactly what every caller got before the parameter existed. It is an
+    explicit per-call override for the scholar second pass, whose facet queries
+    are ALREADY hypothetical-answer text: running HyDE over them pays a full
+    extra 3B generation (measured at 4.8s) to hypothesize about a hypothesis,
+    inside a wall-clock deadline. That is a latency requirement, not a tuning
+    preference.
     """
     if tm is None:
         tm = {}
+    # None means "module default", so an omitted kwarg reproduces the old gate.
+    _hyde_on = HYDE_ENABLED if hyde is None else bool(hyde)
     _t = time.perf_counter()
     intent, wh = classify_intent(question)
     qtok = query_tokens(question)
@@ -2794,6 +2943,9 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
     scores = _apply_card_boost(scores, chunks, intent)
     if persona == "parent":
         scores = _apply_parent_boost(scores, chunks)
+    elif persona == "scholar":
+        scores = _apply_prefix_boost(scores, chunks, _SCHOLAR_SOURCE_PREFIXES,
+                                     SCHOLAR_BOOST)
 
     # Per-sub-question BM25 rankings, fused with the whole-question ranking
     # below so a chunk answering ANY one part well can reach the context window.
@@ -2824,6 +2976,9 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
             keep_k = TOP_K_DEEP
         elif persona == "parent":
             keep_k = PARENT_TOP_K
+        elif persona == "scholar":
+            # Depth comes from breadth of evidence, not from asking for depth.
+            keep_k = SCHOLAR_TOP_K
         elif intent == "multi":
             # Every named entity needs its own facts in context, and at 2 chunks
             # per source TOP_K_FAST=6 covers only three notes -- with the card
@@ -2858,7 +3013,7 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                 # hypothesis dilutes rank slightly, it cannot overwrite the
                 # literal question's ranking.
                 suffix = ""
-                if HYDE_ENABLED:
+                if _hyde_on:
                     hscore = _hyde_scores(question, chunks, meta, tm)
                     if hscore is not None:
                         hyde_ranked = sorted(range(len(chunks)),
@@ -2886,7 +3041,7 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                                          qvec_model=qvec_model)
             order_full = order
             tm["rerank"] = time.perf_counter() - _t
-        if order and (persona == "parent" or intent == "multi"):
+        if order and (persona in ("parent", "scholar") or intent == "multi"):
             # A multi-entity question needs facts from several different notes,
             # and the boosts that make the FIRST entity rank well let its note
             # take every slot: "which was founded first, Gallaudet or the
@@ -2899,10 +3054,15 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
             # question at keep_k and reports anything past the window as "not
             # retrieved at all". That conflates a ranking miss with a window
             # miss, which are different problems with different fixes.
+            # A scholar question has the same shape as the multi case for this
+            # purpose: the Gulati note alone is long enough to fill a 10-slot
+            # window on its own, and an answer sourced from one note cannot
+            # cover more than one facet however good it is.
             order_full = list(order)
             order = _diversify_order(
                 order, chunks, keep_k,
                 PARENT_MAX_PER_SOURCE if persona == "parent"
+                else SCHOLAR_MAX_PER_SOURCE if persona == "scholar"
                 else MULTI_MAX_PER_SOURCE)
         for i in order[:keep_k]:
             retrieved.append(chunks[i])
@@ -2915,6 +3075,180 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
             "order": order, "order_full": order_full if order_full is not None
             else order, "keep_k": keep_k, "retrieved": retrieved,
             "mode": mode, "top_score": top_score, "n_subq": len(sub_rankings)}
+
+
+def _scholar_auto_hook(question, intent):
+    """UNREACHED ON PURPOSE. Nothing calls this.
+
+    The place a future BRAIN_SCHOLAR_AUTO would decide to promote a question to
+    the scholar persona on its own. It is a stub rather than an implementation
+    because auto-promotion changes what the DEFAULT persona does on questions
+    nobody asked to be deep, and the only honest way to buy that is an ablation
+    that prices scholar against default on the same battery. The flag is defined
+    (so an arm can record it) and wired to nothing (so it cannot silently move a
+    number). Delete this function or call it, but do not let it half-exist."""
+    raise NotImplementedError("BRAIN_SCHOLAR_AUTO is not implemented")
+
+
+def _scholar_read_frontmatter(source):
+    """Frontmatter fields for a vault-relative source path, or {}.
+
+    Injected into brain_depth.citation_footer so that module keeps its
+    no-brain-import, no-filesystem guarantee. Frontmatter ONLY, and only the
+    head of the file: the Gulati 2018 note has no frontmatter doi: while its
+    reference list carries 18 other papers' DOIs, so anything that reads the
+    body will confidently attribute someone else's DOI to it."""
+    try:
+        import build_index
+        path = os.path.join(SCHOLAR_VAULT_DIR, str(source))
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            head = fh.read(8192)
+        fm, _body = build_index.split_frontmatter(head)
+        return build_index.parse_frontmatter_fields(fm) or {}
+    except Exception:
+        return {}
+
+
+def _scholar_citation_footer(answer, context_chunks):
+    """Answer with the retrieved-sources footer appended. Never raises.
+
+    Called AFTER faithfulness_flags has graded the model-authored body, which is
+    load-bearing in both directions: the flags must never see our own footer
+    (every name in it would read as an unsupported specific), and the footer's
+    citations are built from frontmatter with the url: field deliberately
+    dropped, so _CITE_URL_RE can never flag a citation we verified ourselves."""
+    if not SCHOLAR_CITE or not answer:
+        return answer
+    try:
+        import brain_depth
+        if CITE_SENTINEL and CITE_SENTINEL.strip() in answer:
+            return answer            # already footed; never double-append
+        footer = brain_depth.citation_footer(vault_sources(context_chunks),
+                                             _scholar_read_frontmatter)
+    except Exception:
+        return answer
+    return answer + footer if footer else answer
+
+
+def _scholar_second_pass(model, question, bm25, chunks, meta, context_chunks,
+                         linked_ids, system_prompt, draft, tm):
+    """One bounded second retrieval+generation pass for the scholar persona.
+
+    Returns (merged_answer, merged_chunks, merged_linked_ids). NEVER raises: the
+    first pass has already produced a usable answer by the time this runs, so
+    every failure mode returns the draft untouched and records tm['scholar_error']
+    rather than taking the turn down.
+
+    Shape, and why it is this shape:
+
+    * Facets come from the vault's own [[wikilink]] graph (meta["links_out"], the
+      map expand_with_links already consumes), ranked by brain_depth.rank_facets
+      for what the draft says LEAST about. LD_FALLBACK_FACETS is used only when
+      the graph yields nothing at all.
+    * Facet retrieval runs with hyde=False and persona="scholar" inside
+      SCHOLAR_DEADLINE_S, and admits at most SCHOLAR_FACET_CHUNKS chunks the
+      first pass has NOT already seen.
+    * Exactly ONE reconciling generation, not one per facet. Per-facet calls
+      re-answer the original question from three narrow chunks, frequently trip
+      _is_insufficient, and when they do not they yield two partial restatements
+      with nothing reconciling them.
+    * The reconciling call sends the draft plus ONLY THE NEW CHUNKS, never the
+      union. fit_context pops from the TAIL, and at keep_k=10 the pass-1 context
+      alone estimates 6,300-7,600 tokens against a 7,424 budget -- a union
+      payload lands ~50% over and sheds exactly the new evidence it exists to
+      deliver.
+    * The system string is byte-identical to pass 1. No "prefer specifics, name
+      every source" instruction: on a 3B that is a citation-fabrication
+      generator, aimed at exactly the output class faithfulness_flags cannot see.
+
+    tm gains scholar_facets_selected / scholar_new_chunks / scholar_pass2_s,
+    which reach results[]["timing"] through LAST_TIMING. They are a free,
+    judge-free, per-arm proof that pass 2 contributed real NEW evidence rather
+    than re-sending what pass 1 already had.
+    """
+    t0 = time.perf_counter()
+    try:
+        import brain_depth
+    except Exception as exc:
+        tm["scholar_error"] = "brain_depth unavailable: " + repr(exc)[:120]
+        return draft, context_chunks, linked_ids
+
+    merged, merged_chunks = draft, context_chunks
+    try:
+        ctx_sources = vault_sources(context_chunks)
+        top_source = ctx_sources[0] if ctx_sources else None
+        seen_ids = {c.get("id") for c in context_chunks
+                    if isinstance(c, dict) and c.get("id") is not None}
+
+        cands = brain_depth.graph_facets(meta.get("links_out") or {},
+                                         top_source, ctx_sources)
+        if not cands:
+            # v1 index (links_out backfilled empty). Same call, synthetic graph,
+            # so the fallback produces facet dicts through the one code path.
+            cands = brain_depth.graph_facets(
+                {_LD_FALLBACK_SEED: list(LD_FALLBACK_FACETS)},
+                _LD_FALLBACK_SEED, ctx_sources)
+        facets = brain_depth.rank_facets(cands, draft, question,
+                                         SCHOLAR_FACETS_N)
+        tm["scholar_facets_selected"] = [f.get("source") for f in facets]
+
+        new_chunks, known = [], set(seen_ids)
+        for f in facets:
+            if time.perf_counter() - t0 >= SCHOLAR_DEADLINE_S:
+                tm["scholar_deadline"] = 1
+                break
+            # Label first, question second: the label is what makes this query
+            # different from pass 1's, and the question keeps the facet's
+            # retrieval anchored to what was actually asked.
+            fq = (f.get("label") or "") + " " + question
+            try:
+                _fr = retrieve_context(fq, bm25, chunks, meta, model=model,
+                                       persona="scholar", tm={},
+                                       hyde=False)
+            except Exception:
+                continue
+            got = brain_depth.new_chunks(_fr.get("retrieved") or [], known,
+                                         SCHOLAR_FACET_CHUNKS)
+            for c in got:
+                cid = c.get("id")
+                if cid is not None:
+                    known.add(cid)
+            new_chunks.extend(got)
+        tm["scholar_new_chunks"] = len(new_chunks)
+        if not new_chunks:
+            return draft, context_chunks, linked_ids
+
+        # Budget the reconciling prompt against the draft, which is prefill the
+        # estimator inside fit_context cannot see from the chunk list alone.
+        tail = ("\n\nDRAFT SO FAR:\n" + draft
+                + "\n\nAdd only what the draft does not already state.")
+        send_chunks, _fit2 = fit_context(question, new_chunks,
+                                         (system_prompt or "") + tail,
+                                         linked_ids)
+        messages = [{"role": "system", "content": system_prompt},
+                    {"role": "user",
+                     "content": build_first_pass_user(question, send_chunks,
+                                                      linked_ids) + tail}]
+        # Same num_ctx as pass 1: a second sequential call is free in VRAM only
+        # at the same window, because the KV cache is already allocated for it.
+        expansion = (chat_once(model, messages,
+                               options=dict(GEN_OPTIONS, num_predict=320),
+                               force_rest=True, timeout=90) or "").strip()
+        if (not expansion or expansion.startswith("[error]")
+                or _is_insufficient(expansion)):
+            return draft, context_chunks, linked_ids
+
+        merged = brain_depth.merge(draft, expansion)
+        # Interleave rather than append: the new evidence lands where a reader
+        # (and any downstream fit) sees it before the weakest pass-1 chunks.
+        merged_chunks = (list(context_chunks[:6]) + list(new_chunks)
+                         + list(context_chunks[6:]))
+    except Exception as exc:
+        tm["scholar_error"] = repr(exc)[:200]
+        return draft, context_chunks, linked_ids
+    finally:
+        tm["scholar_pass2_s"] = time.perf_counter() - t0
+    return merged, merged_chunks, linked_ids
 
 
 def _handle_question_impl(model, question, history, bm25, chunks, meta,
@@ -2979,6 +3313,10 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     # made the small model leave the vault for the web on questions the vault
     # answers well -- slower and less grounded.)
     run.running("model")
+    # Scholar deliberately falls through to VAULT_FIRST_SYSTEM, byte-identical
+    # to the default persona: _is_insufficient and faithfulness_flags key off
+    # this exact contract, and its depth is bought with retrieval breadth and a
+    # second pass, never with a "be thorough, cite everything" instruction.
     system_prompt = PARENT_SYSTEM if persona == "parent" else VAULT_FIRST_SYSTEM
     system_prompt = _shape_for_intent(system_prompt, intent)
     vault_messages = [{"role": "system", "content": system_prompt}]
@@ -3004,7 +3342,12 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     first = None
     streamed = False
     _live_sink = []
-    if STREAM_PHASE1 and context_chunks:
+    if STREAM_PHASE1 and context_chunks and persona != "scholar":
+        # Scholar never streams. vault_ok below commits the turn the moment
+        # tokens are visible, so a streamed draft would render in full and then
+        # visibly GROW as the second pass merged into it. The blocking chat_once
+        # a few lines down is the existing fall-through; no new path is needed.
+        #
         # Holdback streaming: the head is buffered until the INSUFFICIENT
         # decision is safe, then the answer renders live. A refusal aborts the
         # stream with nothing shown and falls through to the branches below,
@@ -3043,6 +3386,15 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
 
     # Case C: the vault answered. Stream the answer we already computed.
     if vault_ok:
+        # Scholar second pass, FIRST statement here and before the flags. The
+        # order is load-bearing: faithfulness_flags must grade the whole
+        # model-authored body (draft + expansion) and nothing else, so the pass
+        # runs before it and the citation footer is appended after it.
+        _draft = first
+        if persona == "scholar" and SCHOLAR_PASS2 and context_chunks:
+            first, context_chunks, linked_ids = _scholar_second_pass(
+                model, question, bm25, chunks, meta, context_chunks,
+                linked_ids, system_prompt, first, tm)
         _flags = faithfulness_flags(
             first, format_vault_context(context_chunks, linked_ids))
         footer = ""
@@ -3051,6 +3403,10 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
                       "vault sources, treat as unverified: "
                       + ", ".join(_flags) + "]")
             first = first.rstrip() + footer
+        if persona == "scholar":
+            # After the flags, never before: see _scholar_citation_footer.
+            # No-op unless BRAIN_SCHOLAR_CITE=1.
+            first = _scholar_citation_footer(first, context_chunks)
         if streamed and _live_sink:
             # The answer body already rendered live; only the footer remains.
             if footer:
@@ -3061,7 +3417,13 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
             sink = run.begin_answer()
             sink(first)
         return _finish(run, history, question, first,
-                       vault_sources(context_chunks))
+                       vault_sources(context_chunks),
+                       # Scholar only, and only when the answer actually grew:
+                       # for every other persona this stays None, so the
+                       # grounding footer keeps reaching history exactly as
+                       # before.
+                       history_text=(_draft if persona == "scholar"
+                                     and _draft != first else None))
 
     # === SKILL LOOP: bounded tool selection before the fixed web route =====
     # Only reached because phase 1 said INSUFFICIENT. The existing phase-2 path
@@ -3174,6 +3536,8 @@ HELP_TEXT = """Commands:
   /deep <q>      re-ask one question with the deep 7B model (slower, more grounded)
   /parent <q>    answer one question in parent mode (warm, plain-language,
                  Deaf-community-affirming guidance for parents of deaf children)
+  /scholar <q>   answer one question in scholar mode (wider retrieval over the
+                 language-deprivation literature; never cached)
   /model         re-pick the model
   /web on|off    allow / disallow web search
   /cache         show the knowledge-bank stats (entries, reuses, balance, size)
@@ -3345,6 +3709,7 @@ def main():
         # Per-question tier: default fast; "/deep <q>" escalates to the deep model.
         deep_once = False
         parent_once = False
+        scholar_once = False
 
         # Commands.
         if question in ("/exit", "/quit"):
@@ -3412,6 +3777,16 @@ def main():
                 continue
             question = rest
             parent_once = True
+        elif question == "/scholar" or question.startswith("/scholar "):
+            # MUST stay above the unknown-command catch-all below, or /scholar
+            # is swallowed as an unknown command.
+            rest = question[len("/scholar"):].strip()
+            if not rest:
+                print("Usage: /scholar <question>  (wider retrieval over the "
+                      "language-deprivation literature for a research answer)")
+                continue
+            question = rest
+            scholar_once = True
         elif question.startswith("/"):
             print("Unknown command. Type /help for the list.")
             continue
@@ -3430,7 +3805,8 @@ def main():
 
         # Fast path: serve from the answer cache before retrieval or a model call.
         # Deep (/deep) answers bypass the cache so they never collide with a fast draft.
-        if cache_enabled and cache is not None and not deep_once and not parent_once:
+        if cache_enabled and cache is not None and not deep_once \
+                and not parent_once and not scholar_once:
             try:
                 run.running("cache")
                 hit = cache.lookup(question)
@@ -3476,12 +3852,14 @@ def main():
         else:
             run.skip("cache", "bypassed for /deep" if deep_once
                      else ("bypassed for /parent" if parent_once
-                           else "cache disabled"))
+                           else ("bypassed for /scholar" if scholar_once
+                                 else "cache disabled")))
 
         try:
             answer, sources = handle_question(
                 q_model, question, history, bm25, chunks, meta, web_enabled, run,
-                persona="parent" if parent_once else "default",
+                persona=("parent" if parent_once
+                         else "scholar" if scholar_once else "default"),
                 qvec=sem_qvec,
                 qvec_model=(getattr(semantic, "model", None)
                             if semantic is not None else None),
@@ -3499,8 +3877,14 @@ def main():
 
         # Store fresh answers in the cache (triggers the storage-optimization
         # pass and compounds the knowledge bank).
+        # A scholar answer is NEVER cached, and this guard is not optional.
+        # Without it a long two-pass answer is stored under the user's question
+        # and later served verbatim to any plain question that clears
+        # FUZZY_THRESHOLD 0.70 -- which is exactly how the 286-word cached
+        # answer already sitting in the cache came to exist. Its latency is
+        # deliberately never amortized.
         if cache_enabled and cache is not None and answer and not deep_once \
-                and not parent_once:
+                and not parent_once and not scholar_once:
             try:
                 cache.store(question, answer, sources, model)
             except Exception:
