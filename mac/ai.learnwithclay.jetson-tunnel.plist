@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps an SSH tunnel from this Mac's 127.0.0.1:11435 to the Jetson's
+  127.0.0.1:11435, where brain_ollama_shim.py listens. That is what Obsidian
+  Smart Chat talks to.
+
+  MAC-ONLY. This file is never pushed to the Jetson and must not be added to
+  deploy.sh's required-file preflight. Install it with:
+
+      cp mac/ai.learnwithclay.jetson-tunnel.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.learnwithclay.jetson-tunnel.plist
+
+  and remove it with `launchctl bootout gui/$(id -u)/ai.learnwithclay.jetson-tunnel`.
+
+  Why launchd and not a helper command you run yourself: `ssh -f -N` has no
+  keepalive by default (measured `ssh -G`: serveraliveinterval 0), macOS
+  net.inet.tcp.keepidle is 7200000ms, and the Jetson's sshd_config has no
+  ClientAlive* lines. Close the lid, reopen on a hotspot, and the forwarder
+  wedges for over two hours while STILL holding port 11435 and accepting
+  connections, so Obsidian gets a socket that hangs forever instead of an
+  error. KeepAlive plus ServerAliveInterval kills the corpse and redials.
+
+  Two details that matter:
+    -N, not -f. launchd has to own the process; a self-backgrounding ssh
+       exits immediately and KeepAlive would respawn it in a tight loop.
+    -L 127.0.0.1:11435:... , not -L 11435:... . The bare form also binds
+       [::1]:11435, which leaves a second listener behind on a wedge.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.learnwithclay.jetson-tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-N</string>
+        <string>-o</string><string>ExitOnForwardFailure=yes</string>
+        <string>-o</string><string>ServerAliveInterval=15</string>
+        <string>-o</string><string>ServerAliveCountMax=3</string>
+        <string>-o</string><string>ConnectTimeout=10</string>
+        <string>-o</string><string>BatchMode=yes</string>
+        <string>-o</string><string>IdentitiesOnly=yes</string>
+        <string>-o</string><string>IdentityFile=/Users/you.lawson/.ssh/id_ed25519</string>
+        <string>-L</string><string>127.0.0.1:11435:127.0.0.1:11435</string>
+        <string>jetson</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- launchd's own floor is 10s anyway; stated so the retry cadence is
+         visible rather than implicit. When Tailscale is down or you are on a
+         captive portal, ssh fails in ~10s and this retries every 10s until the
+         network comes back. That is the intended self-healing behaviour, and
+         it is also why the log below can grow while you are offline. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/you.lawson/Library/Logs/jetson-tunnel.err.log</string>
+    <key>StandardOutPath</key>
+    <string>/Users/you.lawson/Library/Logs/jetson-tunnel.out.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

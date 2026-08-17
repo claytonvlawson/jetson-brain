@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# brain-doctor - is the Mac able to talk to the Jetson brain right now, and if
+# not, which link in the chain is broken?
+#
+# MAC-ONLY. Never pushed to the Jetson; not in deploy.sh's preflight list.
+#
+# Six things have to be true before Obsidian Smart Chat can answer a question,
+# and when any one of them fails Smart Chat shows the same thing: a spinner that
+# never resolves. This walks the chain in dependency order and stops at the
+# first break, because everything after a break fails for the same reason and
+# reporting all six would bury the one that matters.
+#
+# The last two checks are real HTTP requests, not port checks, on purpose. A
+# wedged SSH forwarder keeps holding 11435 and keeps accepting connections, so
+# `lsof -i :11435` reports a healthy tunnel when what is there is a corpse.
+#
+# macOS has no `timeout` binary. Every step carries its own deadline via
+# -o ConnectTimeout, --max-time, or --wait.
+
+set -uo pipefail
+
+JETSON_HOST="${JETSON_HOST:-jetson}"
+JETSON_PEER="${JETSON_PEER:-snowbeach}"
+SHIM_URL="${SHIM_URL:-http://127.0.0.1:11435}"
+TUNNEL_LABEL="ai.learnwithclay.jetson-tunnel"
+
+pass=0
+fail=0
+
+ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$1"; pass=$((pass + 1)); }
+note() { printf '        %s\n' "$1"; }
+
+die() {
+  printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+  fail=1
+  shift
+  if [[ $# -gt 0 ]]; then
+    printf '\n  Fix:\n'
+    for line in "$@"; do printf '    %s\n' "$line"; done
+  fi
+  printf '\n  Stopping here. Everything downstream depends on this.\n'
+  exit 1
+}
+
+printf '\nbrain-doctor: Mac -> Jetson brain\n\n'
+
+# ---- 1. Tailscale is installed and running on this Mac ------------------
+if ! command -v tailscale >/dev/null 2>&1; then
+  die "tailscale CLI not found on PATH" \
+      "brew install --cask tailscale-app     # --cask matters: the bare formula" \
+      "                                      # is a headless daemon with no GUI" \
+      "Then launch Tailscale.app once. The .pkg, not brew, creates" \
+      "/usr/local/bin/tailscale."
+fi
+
+state="$(tailscale status --json 2>/dev/null | /usr/bin/python3 -c \
+  'import json,sys
+try: print(json.load(sys.stdin).get("BackendState","Unknown"))
+except Exception: print("Unreachable")' 2>/dev/null)"
+
+case "$state" in
+  Running)
+    ok "Tailscale is running on this Mac"
+    ;;
+  NeedsLogin)
+    die "Tailscale is installed but not logged in" \
+        "tailscale up" \
+        "Sign in as claytonvlawson@gmail.com. A different identity creates a" \
+        "separate tailnet that cannot see the Jetson at all."
+    ;;
+  Stopped)
+    die "Tailscale is installed but stopped" \
+        "tailscale up"
+    ;;
+  *)
+    die "Tailscale backend state is '${state}'" \
+        "If this followed a macOS upgrade, the network extension needs" \
+        "re-approving: System Settings > General > Login Items & Extensions >" \
+        "Network Extensions, and also check Privacy & Security."
+    ;;
+esac
+
+# ---- 2. Our own node key has not expired --------------------------------
+if tailscale status --json 2>/dev/null | grep -q '"KeyExpiry"'; then
+  note "note: this Mac still has a node key expiry set. Disable it at"
+  note "      login.tailscale.com/admin/machines, or it drops off the tailnet"
+  note "      on that date with no local symptom."
+fi
+
+# ---- 3. The Jetson is online on the tailnet -----------------------------
+if ! tailscale status 2>/dev/null | grep -q "$JETSON_PEER"; then
+  die "peer '${JETSON_PEER}' is not in the tailnet peer list" \
+      "Either you are signed into the wrong tailnet, or the Jetson's node key" \
+      "expired. Check login.tailscale.com/admin/machines."
+fi
+
+if tailscale status 2>/dev/null | grep "$JETSON_PEER" | grep -q 'offline'; then
+  die "peer '${JETSON_PEER}' is offline" \
+      "The Jetson is powered off, or its home uplink is down, or its wifi" \
+      "lease moved. Tailscale cannot help with any of those remotely." \
+      "If every peer shows offline instead of just this one, you are behind a" \
+      "captive portal: disconnect Tailscale, load http://neverssl.com, finish" \
+      "the portal, reconnect."
+fi
+ok "Jetson (${JETSON_PEER}) is online on the tailnet"
+
+# ---- 4. How we are reaching it: direct or relayed -----------------------
+ping_out="$(tailscale ping -c 1 --timeout 5s "$JETSON_PEER" 2>&1)"
+if echo "$ping_out" | grep -q 'direct'; then
+  ok "direct WireGuard connection (no relay)"
+elif echo "$ping_out" | grep -q 'DERP'; then
+  ok "reachable, but relayed through DERP"
+  note "Relayed works and is not an error. It is slower, and it is unexpected"
+  note "here: the Jetson is behind an easy NAT with UDP open, so direct is the"
+  note "prediction. Worth noticing, not worth fixing mid-trip."
+else
+  die "tailscale ping to ${JETSON_PEER} did not answer" \
+      "${ping_out}"
+fi
+
+# ---- 5. SSH actually works ----------------------------------------------
+ssh_err="$(ssh -o ConnectTimeout=8 -o BatchMode=yes "$JETSON_HOST" true 2>&1)"
+if [[ $? -ne 0 ]]; then
+  die "ssh ${JETSON_HOST} failed" \
+      "${ssh_err}" \
+      "" \
+      "If this mentions a host key mismatch or hangs without output, suspect" \
+      "Tailscale SSH. With RunSSH on and the ACL action left at 'check'," \
+      "tailscaled intercepts tailnet port 22 before sshd sees it, ignores" \
+      "authorized_keys, presents its own host key, and demands interactive" \
+      "BROWSER re-auth that a background tunnel can never answer." \
+      "Fix at login.tailscale.com/admin/acls: set the ssh rule action to" \
+      "'accept' for autogroup:self. Then connect once interactively."
+fi
+ok "ssh ${JETSON_HOST} answers"
+
+# ---- 6. The tunnel is up and the shim answers ---------------------------
+if ! curl -sf --max-time 5 "${SHIM_URL}/api/tags" >/dev/null 2>&1; then
+  holder="$(lsof -nP -iTCP:11435 -sTCP:LISTEN 2>/dev/null | tail -n +2)"
+  if [[ -n "$holder" ]]; then
+    die "something holds port 11435 but /api/tags did not answer" \
+        "This is the wedged-forwarder case: the socket accepts and then hangs." \
+        "${holder}" \
+        "" \
+        "launchctl kickstart -k gui/\$(id -u)/${TUNNEL_LABEL}"
+  fi
+  die "nothing is listening on 127.0.0.1:11435" \
+      "The tunnel is not up. If the LaunchAgent is installed:" \
+      "  launchctl kickstart -k gui/\$(id -u)/${TUNNEL_LABEL}" \
+      "  tail -20 ~/Library/Logs/jetson-tunnel.err.log" \
+      "If it is not installed yet:" \
+      "  cp mac/${TUNNEL_LABEL}.plist ~/Library/LaunchAgents/" \
+      "  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/${TUNNEL_LABEL}.plist" \
+      "To open one by hand for a single session:" \
+      "  ssh -N -L 127.0.0.1:11435:127.0.0.1:11435 ${JETSON_HOST}"
+fi
+ok "tunnel is up and the shim answers /api/tags"
+
+# ---- 7. A real generation round trip ------------------------------------
+# /api/tags is served from a table and proves nothing about the model. This
+# asks the shim for one token, which is the first check that touches Ollama and
+# the GPU on the other end.
+chat="$(curl -s --max-time 90 "${SHIM_URL}/api/chat" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"jetson-brain","stream":false,"messages":[{"role":"user","content":"reply with the single word: ok"}]}' 2>&1)"
+
+if echo "$chat" | grep -qi '"content"'; then
+  ok "end to end: the model generated a reply through the tunnel"
+else
+  die "the shim is listening but /api/chat did not produce a reply" \
+      "${chat:0:400}" \
+      "" \
+      "The transport is fine, so this is on the Jetson. Check the shim and" \
+      "Ollama:" \
+      "  ssh ${JETSON_HOST} 'systemctl status brain-ollama-shim.service --no-pager'" \
+      "  ssh ${JETSON_HOST} 'journalctl -u brain-ollama-shim.service -n 40 --no-pager'" \
+      "  ssh ${JETSON_HOST} 'systemctl is-active ollama.service'"
+fi
+
+# ---- Summary -------------------------------------------------------------
+printf '\n  %d checks passed. Obsidian Smart Chat should work.\n' "$pass"
+printf '  Smart Chat host: %s   model: jetson-brain\n\n' "$SHIM_URL"
+exit 0
