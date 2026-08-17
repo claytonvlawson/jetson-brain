@@ -809,7 +809,15 @@ def extract_urls(text):
 # rsync's --delete deliberately spares excluded paths, so any Templates/ already
 # on the device would otherwise be indexed forever. Pruning here is what actually
 # keeps it out of the index.
-_JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv", "Templates"}
+#
+# "_Fulltext" holds verbatim reproductions of published papers, kept in the vault
+# for offline reading and Obsidian search. They are excluded because the same
+# prose already lives in the analysis note and in the per-section child notes, and
+# a whole paper is one source key: the per-source chunk cap means an 11k-word
+# reproduction contributes roughly two chunks of arbitrary slice while its
+# duplicated text still inflates the BM25 document frequencies that the focused
+# child notes are scored against. Indexing it can only dilute them.
+_JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv", "Templates", "_Fulltext"}
 
 
 def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,

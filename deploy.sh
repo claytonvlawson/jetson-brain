@@ -238,9 +238,12 @@ Next steps:
   4. Phone web UI (open the brain in Safari from your iPhone over Tailscale):
        ssh ${JETSON}
        sudo bash ${REMOTE}/brain-web.sh setup
-     Installs a boot service (brain_web.py on 127.0.0.1:8899) and exposes it
-     tailnet-only over HTTPS via 'tailscale serve'. Prints the https URL to open.
-     Status/URL: bash ${REMOTE}/brain-web.sh status
+     Installs a boot service that binds brain_web.py to this node's raw Tailscale
+     IPv4 on port 8899, so it is reachable from the tailnet and nowhere else.
+     Prints the http URL to open. Status/URL: bash ${REMOTE}/brain-web.sh status
+     Note: because it binds the tailnet address rather than loopback, a
+     'curl 127.0.0.1:8899' will connect-refuse even when the service is healthy.
+     Probe the Tailscale IP, or just use 'brain-web.sh status'.
 
   5. Obsidian Smart Chat against the brain (Ollama-API shim, one time):
        ssh ${JETSON}
