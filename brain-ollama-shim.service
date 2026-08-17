@@ -2,10 +2,10 @@
 Description=Jetson brain Ollama-API shim (Obsidian Smart Chat talks to the RAG unpatched)
 Documentation=file:/mnt/nvme/brain/brain_ollama_shim.py
 # Needs Ollama (the real one, on localhost:11434, is what brain.py generates
-# with) and tailscaled (for the tailnet IP we bind to). Order after both;
-# tailscaled must be up or the bind address does not exist yet.
-After=network-online.target tailscaled.service ollama.service
-Wants=network-online.target tailscaled.service
+# with). No tailscaled dependency: unlike brain-web.service this binds loopback,
+# so there is no tailnet address to wait for. See the ExecStart comment.
+After=network-online.target ollama.service
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -13,12 +13,24 @@ Type=simple
 # so root would not find them on the import path.
 User=snowbeach
 WorkingDirectory=/mnt/nvme/brain
-# Wait until tailscaled has handed us an IPv4 tailnet address, then bind to it so
-# Obsidian on the Mac reaches http://<tailscale-ip>:11435 directly. Resolving at
-# startup (rather than hardcoding 100.x.x.x) means it survives an IP change.
-# Drop the ExecStartPre and the env override to keep it on 127.0.0.1 instead.
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do /usr/bin/tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
-ExecStart=/bin/sh -c 'exec env SHIM_HOST="$(/usr/bin/tailscale ip -4 | head -n1)" /usr/bin/python3 /mnt/nvme/brain/brain_ollama_shim.py'
+# Bind loopback (SHIM_HOST unset defaults to 127.0.0.1) and let the Mac reach it
+# through an SSH tunnel:
+#     ssh -N -L 11435:127.0.0.1:11435 user@192.168.55.1
+#
+# This deliberately does NOT bind the tailnet IP the way brain-web.service does,
+# because the two have opposite requirements. brain-web serves an iPhone, which
+# is on the tailnet. This serves Obsidian on the Mac, and the Mac is NOT on the
+# tailnet (no Tailscale installed), so a tailnet bind is unreachable from the one
+# client that matters. The only Mac-to-Jetson path is the USB-C link, and
+# tunnelling over the SSH that already runs on it adds no new exposure: the
+# listener stays on loopback where nothing else on the LAN or tailnet can see it.
+#
+# If Tailscale is ever installed on the Mac, binding the tailnet address becomes
+# the better option (it works without the cable). Restore it by adding back:
+#   ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do /usr/bin/tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
+#   ExecStart=/bin/sh -c 'exec env SHIM_HOST="$(/usr/bin/tailscale ip -4 | head -n1)" /usr/bin/python3 /mnt/nvme/brain/brain_ollama_shim.py'
+# and put tailscaled.service back in After=/Wants= above.
+ExecStart=/usr/bin/python3 /mnt/nvme/brain/brain_ollama_shim.py
 Environment=PYTHONUNBUFFERED=1
 # Port 11435, never 11434: the real Ollama owns 11434 and brain.py needs it.
 Environment=SHIM_PORT=11435
@@ -27,7 +39,8 @@ Environment=SHIM_WEB=0
 # Optional shared secret. Set it here and append /t/<token> to the "Ollama host"
 # value in Smart Chat's settings - the plugin sends no headers on the chat
 # request, so the token has to ride the URL path. Empty disables the check,
-# which is fine on a tailnet-only bind.
+# which is fine on a loopback-only bind reached through an SSH tunnel: anything
+# that can open the port already has an authenticated shell on the device.
 # Environment=SHIM_TOKEN=changeme
 Restart=on-failure
 RestartSec=3

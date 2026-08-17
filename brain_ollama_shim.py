@@ -12,8 +12,19 @@ is not talking to Ollama.
     GET  /api/version     -> {"version": "..."}
     GET  /api/tags        -> the two advertised models
     POST /api/show        -> per-model metadata (the plugin calls this per model)
-    POST /api/chat        -> NDJSON stream of Ollama chat frames, or one JSON
-                             object when {"stream": false}
+    POST /api/chat        -> a LIVE NDJSON stream of Ollama chat frames, one
+                             frame per token as the model generates it, or one
+                             JSON object when {"stream": false}
+
+Streaming is real, not a replay. brain.py already streams every token through
+the callable returned by run.begin_answer() (chat_stream_holdback), so the shim
+hands handle_question a _CaptureRun whose sink pushes onto a queue, runs the
+answer on a worker thread, and writes chunked NDJSON from the request thread as
+tokens arrive. Nothing in brain.py changes. One caveat worth knowing before
+judging the latency: chat_stream_holdback buffers the head of the generation
+until the INSUFFICIENT-refusal decision is safe, so the first ~210 characters
+still land in one burst. What this buys is that the REST of a long answer
+renders progressively instead of the whole thing appearing at the end.
 
 Everything below was verified against the plugin source, not memory
 (.obsidian/plugins/smart-chat/main.js, class SmartChatModelOllamaAdapter). The
@@ -61,6 +72,7 @@ Run locally to test:
 """
 import json
 import os
+import queue
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -74,6 +86,17 @@ WEB_ENABLED = os.environ.get("SHIM_WEB", "0") == "1"
 MAX_Q = int(os.environ.get("SHIM_MAX_Q", "500"))   # cap question length
 MAX_BODY = int(os.environ.get("SHIM_MAX_BODY", "200000"))  # cap POST body bytes
 QUEUE_TIMEOUT = float(os.environ.get("SHIM_QUEUE_TIMEOUT", "120"))  # deep model is slow
+# Live token streaming. SHIM_STREAM_LIVE=0 falls back to the original behaviour
+# (answer fully, then replay it as frames), which is one env var away if a
+# client ever turns out to dislike a chunked response.
+STREAM_LIVE = os.environ.get("SHIM_STREAM_LIVE", "1") not in ("0", "false", "False", "no")
+# Retrieval runs for seconds before the first token exists. An empty-content
+# frame every HEARTBEAT_S keeps the connection warm through that silence and is
+# what makes a client disconnect visible while nothing is being generated.
+HEARTBEAT_S = float(os.environ.get("SHIM_HEARTBEAT", "15"))
+# Hard ceiling on one streamed answer. A generation wedged inside Ollama would
+# otherwise hold the socket (and the GPU permit) forever.
+STREAM_DEADLINE = float(os.environ.get("SHIM_STREAM_DEADLINE", "600"))
 # Append the cited notes as an Obsidian [[wikilink]] block so an answer copied
 # into a note is already linked into the graph. SHIM_LINKS=0 turns it off.
 LINKS_ENABLED = os.environ.get("SHIM_LINKS", "1") not in ("0", "false", "False", "no")
@@ -91,7 +114,7 @@ FRAME_CHARS = 80
 
 # History cap. Smart Chat sends the whole thread every turn; brain.py's own
 # HISTORY_TURNS is the authority on how much survives, but the prompt still gets
-# built from what we pass, and num_ctx is 6144 where Ollama truncates from the
+# built from what we pass, and Ollama truncates a prompt over num_ctx from the
 # TOP (dropping the system prompt and the grounding contract). So hard-cap both
 # the number of messages and their characters here, before brain.py ever sees
 # them.
@@ -211,9 +234,9 @@ def wikilink_footer(sources):
     return "\n\n**Sources**\n" + "\n".join(lines) + "\n"
 
 
-def _content_frames(text, size=FRAME_CHARS):
-    r"""Split answer text into stream-frame-sized pieces such that no piece
-    contains the substring `done_reason`.
+def _safe_pieces(piece):
+    r"""Split one piece of answer text so that no returned piece contains the
+    substring `done_reason`.
 
     The plugin ends the stream at the first frame containing '"done_reason"'
     (SmartChatModelOllamaAdapter.is_end_of_stream). An answer that quotes that
@@ -221,19 +244,38 @@ def _content_frames(text, size=FRAME_CHARS):
     \\"done_reason\\", and the substring check does not care about the escaping
     backslashes, so it would truncate the answer. Cutting the token across two
     frames makes that impossible without altering a single character of the
-    answer the user sees."""
+    answer the user sees.
+
+    No carry buffer across calls is needed, and that is deliberate. Each NDJSON
+    line is dispatched to the plugin as ONE message (SmartStreamer only
+    dispatches a piece once it has seen the newline after it, which is why
+    ndjson() insists on the trailing "\n"), and is_end_of_stream tests that
+    single message. So a token ending in "done_" followed by a token starting
+    with "reason" lands in two separate messages and cannot end the stream. The
+    only real hazard is one frame carrying the whole substring, which is exactly
+    what this function prevents."""
+    out = []
+    while True:
+        at = piece.find("done_reason")
+        if at < 0:
+            break
+        cut = at + len("done_")  # split inside the token, keep every character
+        out.append(piece[:cut])
+        piece = piece[cut:]
+    if piece:
+        out.append(piece)
+    return out
+
+
+def _content_frames(text, size=FRAME_CHARS):
+    """Split answer text into stream-frame-sized pieces, each safe to send.
+
+    Used for text that is already complete when we frame it: the blocking
+    reply, the busy/error messages, and the post-stream delta. Live tokens go
+    straight through _safe_pieces instead, one frame per token."""
     out = []
     for i in range(0, len(text), size):
-        piece = text[i:i + size]
-        while True:
-            at = piece.find("done_reason")
-            if at < 0:
-                break
-            cut = at + len("done_")  # split inside the token, keep every character
-            out.append(piece[:cut])
-            piece = piece[cut:]
-        if piece:
-            out.append(piece)
+        out.extend(_safe_pieces(text[i:i + size]))
     return out
 
 
@@ -243,46 +285,52 @@ def _now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def chat_frames(model_name, answer, elapsed_ns):
-    """The full NDJSON body for a streaming /api/chat response.
+def _frame(model_name, created, content, done=False, **extra):
+    """One Ollama chat frame. Shared by the live writer and chat_frames so the
+    two can never drift apart in shape."""
+    frame = {
+        "model": model_name,
+        "created_at": created,
+        "message": {"role": "assistant", "content": content},
+        "done": done,
+    }
+    frame.update(extra)
+    return frame
 
-    Frame shape mirrors real Ollama: content frames carry
-    message.content + done:false, and one final frame carries done_reason,
-    done:true and the eval counters the plugin turns into OpenAI usage
+
+def _done_extra(answer, elapsed_ns, stats=None):
+    """The final frame's counters, which the plugin turns into OpenAI usage
     (prompt_eval_count -> prompt_tokens, eval_count -> completion_tokens).
-    Token counts are approximated at 4 characters per token, the same estimate
-    the plugin's own count_tokens fallbacks use."""
+
+    `stats` is brain.LAST_CHAT_STATS, the REAL prefill/generation counters
+    Ollama reported for this turn. It is only populated on paths that actually
+    reached the model, so every field falls back to the old estimate (4
+    characters per token, the same estimate the plugin's own count_tokens
+    fallback uses) when it is missing."""
+    stats = stats or {}
+    return {
+        "done_reason": "stop",
+        "total_duration": stats.get("total_duration") or elapsed_ns,
+        "load_duration": 0,
+        "prompt_eval_count": stats.get("prompt_eval_count", 0),
+        "prompt_eval_duration": 0,
+        "eval_count": stats.get("eval_count") or max(1, len(answer) // 4),
+        "eval_duration": elapsed_ns,
+    }
+
+
+def chat_frames(model_name, answer, elapsed_ns, stats=None):
+    """The full NDJSON body for a /api/chat response whose answer is already
+    complete: the blocking reply, and the SHIM_STREAM_LIVE=0 fallback."""
     created = _now_iso()
-    frames = []
-    for piece in _content_frames(answer):
-        frames.append({
-            "model": model_name,
-            "created_at": created,
-            "message": {"role": "assistant", "content": piece},
-            "done": False,
-        })
+    frames = [_frame(model_name, created, piece)
+              for piece in _content_frames(answer)]
     if not frames:
         # An empty stream would leave the plugin waiting on a message that never
         # carries a role; send one empty content frame so res_adapter has a role.
-        frames.append({
-            "model": model_name,
-            "created_at": created,
-            "message": {"role": "assistant", "content": ""},
-            "done": False,
-        })
-    frames.append({
-        "model": model_name,
-        "created_at": created,
-        "message": {"role": "assistant", "content": ""},
-        "done_reason": "stop",
-        "done": True,
-        "total_duration": elapsed_ns,
-        "load_duration": 0,
-        "prompt_eval_count": 0,
-        "prompt_eval_duration": 0,
-        "eval_count": max(1, len(answer) // 4),
-        "eval_duration": elapsed_ns,
-    })
+        frames.append(_frame(model_name, created, ""))
+    frames.append(_frame(model_name, created, "", done=True,
+                         **_done_extra(answer, elapsed_ns, stats)))
     return frames
 
 
@@ -292,13 +340,102 @@ def ndjson(frames):
     return "".join(json.dumps(f, ensure_ascii=False) + "\n" for f in frames)
 
 
-def blocking_response(model_name, answer, elapsed_ns):
+def blocking_response(model_name, answer, elapsed_ns, stats=None):
     """The single-object body for {"stream": false}. The plugin's complete()
     path parses this with the same response adapter, so it is the final frame
     with the content filled in."""
-    body = chat_frames(model_name, answer, elapsed_ns)[-1]
+    body = chat_frames(model_name, answer, elapsed_ns, stats)[-1]
     body["message"] = {"role": "assistant", "content": answer}
     return body
+
+
+# ---------------------------------------------------------------------------
+# Answering.
+# ---------------------------------------------------------------------------
+class _CaptureRun(brain._NullRun):
+    """A UI Run that captures the answer instead of printing it.
+
+    brain.handle_question drives a progress tree through this object, calling
+    running/done/skip/fail/finish/sources/begin_answer on it unconditionally.
+    Subclassing _NullRun rather than reimplementing the interface is what keeps
+    that complete: every stage method it does not need already exists as a
+    no-op, so a new stage added to brain.py cannot break the shim.
+
+    Two overrides matter. begin_answer() is THE streaming seam: brain.py hands
+    every generated token to the callable it returns (see chat_stream_holdback),
+    so pushing those onto a queue is the whole of live streaming. sources() is
+    overridden purely to stop _NullRun writing to stdout, where it would spam
+    the journal - the shim gets the source list from handle_question's return
+    value instead.
+
+    With q=None it just accumulates, which is what the blocking path wants."""
+
+    def __init__(self, q=None):
+        self.q = q
+        self.parts = []
+
+    def _emit(self, piece):
+        if not piece:
+            return
+        self.parts.append(piece)
+        if self.q is not None:
+            self.q.put(("tok", piece))
+
+    def begin_answer(self):
+        return self._emit
+
+    def sources(self, srcs, vault_name=None):
+        pass
+
+    @property
+    def text(self):
+        """Everything brain.py streamed, in order. Includes brain.py's own
+        inline notes ("[stream interrupted...]") and the grounding footer it
+        pushes through the same sink - deliberately, because this string is
+        what the streaming delta is measured against and dropping anything
+        from it would double-emit that text."""
+        return "".join(self.parts)
+
+
+def answer_question(model_name, question, history, run):
+    """Answer one question. Returns (answer, sources, stats), never raises, and
+    always yields a non-empty answer.
+
+    This is the whole GPU-serialized critical section, and it runs entirely on
+    ONE thread - the caller's for the blocking path, the worker's for the
+    streaming path. Acquiring and releasing _gpu in the same frame is what keeps
+    the single-flight lock honest: an earlier design acquired on the request
+    thread and released on the worker, which is legal for a BoundedSemaphore but
+    leaves a permanently wedged device one early return away.
+
+    brain.LAST_CHAT_STATS is a process global, not per-request, so it is read
+    HERE, inside the lock, while nothing else can be generating. Reading it any
+    later would attribute one question's token counts to another."""
+    if not _gpu.acquire(timeout=QUEUE_TIMEOUT):
+        # A busy device answers "try again" rather than piling a second 3B/7B
+        # generation onto 8GB of shared memory.
+        return ("The brain is busy with another question. Try again in a moment.",
+                [], {})
+    try:
+        # Auto-learn hot-reload (safe here: the GPU lock makes this the only
+        # in-flight question, so swapping the globals cannot race a
+        # concurrent handle_question).
+        global CHUNKS, BM25, META, INDEX_MTIME
+        CHUNKS, BM25, META, INDEX_MTIME, _ = brain.maybe_reload_index(
+            CHUNKS, BM25, META, INDEX_MTIME)
+        answer, sources = brain.handle_question(
+            resolve_model(model_name), question, history, BM25, CHUNKS,
+            META, WEB_ENABLED, run)
+        stats = dict(getattr(brain, "LAST_CHAT_STATS", None) or {})
+    except Exception as exc:  # never let one bad question take the server down
+        print("[shim] error:", exc, flush=True)
+        answer, sources, stats = "The brain hit an error answering that.", [], {}
+    finally:
+        _gpu.release()
+
+    if not answer:
+        answer, sources = "The brain could not answer that from the vault.", []
+    return answer, sources, stats
 
 
 # ---------------------------------------------------------------------------
@@ -337,12 +474,13 @@ def tags_payload():
 def show_payload(name):
     """Per-model metadata. parse_model_data() looks for the first model_info key
     containing ".context_length" and uses it as max_input_tokens, so report the
-    REAL window brain.py generates with (GEN_OPTIONS num_ctx = 6144). Claiming
+    REAL window brain.py generates with (GEN_OPTIONS num_ctx, 8192 today, raised
+    from 6144 on measurement - so read the dict, never a literal). Claiming
     128k here would let the plugin pack a prompt that Ollama then truncates from
     the top, silently dropping the system prompt and the grounding contract."""
     deep = "deep" in str(name or "").lower()
     family = "qwen2" if deep else "llama"
-    num_ctx = brain.GEN_OPTIONS.get("num_ctx", 6144)
+    num_ctx = brain.GEN_OPTIONS.get("num_ctx", 8192)
     return {
         "license": "",
         "modelfile": "# jetson-brain RAG (brain.py), served over the Ollama API",
@@ -430,12 +568,58 @@ class Handler(BaseHTTPRequestHandler):
                        "application/json", close=close)
 
     def _send_ndjson(self, frames):
-        # Content-Length rather than chunked transfer encoding: the answer is
-        # already complete by the time we frame it (handle_question returns the
-        # whole string), so there is nothing left to stream incrementally and a
-        # known length is one less thing to get wrong. SmartStreamer reads
+        # Content-Length is correct HERE because this path frames an answer that
+        # is already complete: the empty-question reply, and the
+        # SHIM_STREAM_LIVE=0 fallback. The live path below cannot know its
+        # length up front and uses chunked instead. SmartStreamer reads
         # xhr.responseText, which works either way.
         self._send_raw(200, ndjson(frames), "application/x-ndjson")
+
+    # -- live streaming ---------------------------------------------------
+    def _open_stream(self):
+        """Headers for a chunked NDJSON stream.
+
+        Chunked rather than Content-Length (unknown up front) and rather than
+        Connection: close (which would drop Chromium's pooled connection on
+        every single chat, the very connection the close=True guard above works
+        to keep clean). _send_raw cannot be reused because it commits a length,
+        so _cors() has to be called BY HAND here - without it Obsidian's
+        app://obsidian.md XHR fails before reading a byte, and SmartStreamer
+        reports that as a bare "Stream error"."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Transfer-Encoding", "chunked")
+        self._cors()
+        self.end_headers()
+
+    def _write_frame(self, frame):
+        """One frame as one HTTP chunk. False means the client is gone.
+
+        The whole frame is encoded before being sized, so a chunk boundary can
+        never fall inside a multi-byte character."""
+        body = (json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            self.wfile.write(b"%x\r\n" % len(body) + body + b"\r\n")
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return False
+
+    def _end_stream(self, gone):
+        """The terminating zero-length chunk.
+
+        Skipped entirely when the client is already gone: writing a terminator
+        to a dead socket is how a cleanup path raises a SECOND exception and
+        takes the handler thread down with it. A half-written stream also
+        cannot be reused, so the connection is closed rather than pooled."""
+        if gone:
+            self.close_connection = True
+            return
+        try:
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
 
     def log_message(self, *args):
         pass  # quiet the default per-request stderr line
@@ -516,42 +700,120 @@ class Handler(BaseHTTPRequestHandler):
                                "I did not get a question to answer.", 0)
 
         t0 = time.perf_counter()
-        # A busy device answers "try again" rather than piling a second 3B/7B
-        # generation onto 8GB of shared memory.
-        if not _gpu.acquire(timeout=QUEUE_TIMEOUT):
-            return self._reply(model_name, stream,
-                               "The brain is busy with another question. Try again in a moment.",
-                               int((time.perf_counter() - t0) * 1e9))
-        try:
-            # Auto-learn hot-reload (safe here: the GPU lock makes this the only
-            # in-flight question, so swapping the globals cannot race a
-            # concurrent handle_question).
-            global CHUNKS, BM25, META, INDEX_MTIME
-            CHUNKS, BM25, META, INDEX_MTIME, _ = brain.maybe_reload_index(
-                CHUNKS, BM25, META, INDEX_MTIME)
-            answer, sources = brain.handle_question(
-                resolve_model(model_name), question, history, BM25, CHUNKS,
-                META, WEB_ENABLED, brain._NullRun())
-        except Exception as exc:  # never let one bad question take the server down
-            print("[shim] error:", exc, flush=True)
-            answer, sources = "The brain hit an error answering that.", []
-        finally:
-            _gpu.release()
+        if stream and STREAM_LIVE:
+            return self._stream_chat(model_name, question, history, t0)
 
-        if not answer:
-            answer, sources = "The brain could not answer that from the vault.", []
-        elif LINKS_ENABLED:
+        answer, sources, stats = answer_question(
+            model_name, question, history, _CaptureRun())
+        if LINKS_ENABLED:
             answer = answer + wikilink_footer(sources)
         return self._reply(model_name, stream, answer,
-                           int((time.perf_counter() - t0) * 1e9))
+                           int((time.perf_counter() - t0) * 1e9), stats)
 
-    def _reply(self, model_name, stream, answer, elapsed_ns):
+    def _stream_chat(self, model_name, question, history, t0):
+        """Write NDJSON frames as brain.py generates tokens.
+
+        The answer runs on a worker thread and pushes tokens onto a queue; this
+        thread does nothing but drain the queue and write. The worker owns the
+        GPU permit for its whole life, so this thread must keep draining to the
+        sentinel even after the client hangs up - abandoning the queue would
+        leave a generation running with nobody to finish it."""
+        q = queue.Queue(maxsize=1024)
+        run = _CaptureRun(q)
+        box = {}
+
+        def worker():
+            try:
+                box["result"] = answer_question(model_name, question, history, run)
+            finally:
+                q.put(("done", None))
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        created = _now_iso()
+        gone = False
+        wrote = False
+        self._open_stream()
+        try:
+            deadline = time.monotonic() + STREAM_DEADLINE
+            while True:
+                try:
+                    kind, payload = q.get(timeout=HEARTBEAT_S)
+                except queue.Empty:
+                    if time.monotonic() > deadline:
+                        # The worker still holds the GPU permit, so every later
+                        # question gets the friendly "busy" text until this
+                        # process restarts. Correct, but indistinguishable from
+                        # a broken shim, so say so loudly.
+                        print("[shim] stream deadline hit with the worker still "
+                              "running; the GPU permit is held until it ends",
+                              flush=True)
+                        break
+                    # Silence here is retrieval, not a stall. An empty content
+                    # frame costs the plugin nothing (it appends "") and is what
+                    # surfaces a disconnect while nothing is generating.
+                    if not gone:
+                        gone = not self._write_frame(_frame(model_name, created, ""))
+                    continue
+                if kind == "done":
+                    break
+                if gone:
+                    continue  # keep draining so the worker can finish
+                for piece in _safe_pieces(payload):
+                    if not self._write_frame(_frame(model_name, created, piece)):
+                        gone = True
+                        break
+                    wrote = True
+
+            answer, sources, stats = box.get("result") or (
+                "The brain could not answer that from the vault.", [], {})
+            footer = wikilink_footer(sources) if LINKS_ENABLED else ""
+            streamed = run.text
+            if not streamed:
+                # Nothing streamed: the holdback refused, the blocking
+                # fall-through ran, or the persona never streams (scholar). Frame
+                # the whole answer, exactly as the pre-streaming shim did.
+                tail = answer
+            elif answer.startswith(streamed):
+                tail = answer[len(streamed):]
+            else:
+                # The user has already watched `streamed` arrive; re-sending the
+                # answer would duplicate it. Say so rather than dropping text
+                # invisibly.
+                print("[shim] streamed text diverged from the returned answer; "
+                      "sending only the sources footer", flush=True)
+                tail = ""
+            for piece in _content_frames(tail + footer):
+                if gone:
+                    break
+                if not self._write_frame(_frame(model_name, created, piece)):
+                    gone = True
+                    break
+                wrote = True
+            if not wrote and not gone:
+                # The plugin needs at least one message carrying a role.
+                gone = not self._write_frame(_frame(model_name, created, ""))
+            if not gone:
+                elapsed_ns = int((time.perf_counter() - t0) * 1e9)
+                self._write_frame(_frame(model_name, created, "", done=True,
+                                         **_done_extra(answer, elapsed_ns, stats)))
+        except Exception as exc:
+            # The status line is already sent, so this cannot become a 4xx. All
+            # that is left is to close the stream cleanly.
+            print("[shim] stream error:", exc, flush=True)
+        finally:
+            self._end_stream(gone)
+
+    def _reply(self, model_name, stream, answer, elapsed_ns, stats=None):
         """Always 200, even for the busy/error paths. SmartStreamer treats any
         other status as a stream error and the user sees nothing but a console
         message, so the friendly text has to ride the normal answer channel."""
         if stream:
-            return self._send_ndjson(chat_frames(model_name, answer, elapsed_ns))
-        return self._send(200, blocking_response(model_name, answer, elapsed_ns))
+            return self._send_ndjson(
+                chat_frames(model_name, answer, elapsed_ns, stats))
+        return self._send(200,
+                          blocking_response(model_name, answer, elapsed_ns, stats))
 
 
 def main():

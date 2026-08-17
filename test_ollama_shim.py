@@ -39,6 +39,11 @@ _brain.GEN_OPTIONS = {"num_ctx": 6144}
 _brain.load_index = lambda: ([], None, {})
 _brain.index_mtime = lambda: 0.0
 _brain.maybe_reload_index = lambda c, b, m, t: (c, b, m, t, False)
+# Per-turn Ollama counters. Real brain.py sets these from the final stream part;
+# the shim reads them for the done frame's usage numbers. Present here so the
+# real code path is exercised rather than only its getattr fallback.
+_brain.LAST_CHAT_STATS = {}
+_brain.LAST_TIMING = {}
 
 
 def _handle_question(model, question, history, bm25, chunks, meta, web, run):
@@ -51,7 +56,30 @@ _brain.handle_question = _handle_question
 
 
 class _NullRun:
-    pass
+    """Matches real brain.py: every stage method is a no-op and begin_answer
+    returns the token sink. The shim's _CaptureRun subclasses this, so the
+    stub has to expose the same surface or the subclass is not representative."""
+
+    def running(self, *a, **k):
+        pass
+
+    def done(self, *a, **k):
+        pass
+
+    def skip(self, *a, **k):
+        pass
+
+    def fail(self, *a, **k):
+        pass
+
+    def finish(self, *a, **k):
+        pass
+
+    def begin_answer(self):
+        return lambda piece: None
+
+    def sources(self, srcs, vault_name=None):
+        pass
 
 
 _brain._NullRun = _NullRun
@@ -296,6 +324,139 @@ status, text, _ = post("/api/chat", {"messages": [{"role": "user", "content": "q
 check("a raising brain still answers 200 with a valid done frame",
       status == 200 and json.loads(text.strip().split("\n")[-1])["done"] is True)
 _brain.handle_question = _handle_question
+
+
+# ---- live token streaming --------------------------------------------------
+# The stubs above never call run.begin_answer(), so they exercise the "nothing
+# streamed" fallback. These call it for real, which is the actual streaming
+# path: brain.py hands every token to the sink begin_answer() returns.
+#
+# Every check here is wrapped, and every read is bounded by a timeout. This file
+# is straight-line module-scope asserts with no isolation, so an uncaught
+# exception would abort it and silently skip every later check - and a streaming
+# read that blocks forever would wedge the run instead of failing it.
+def stream_post(payload, timeout=20):
+    req = urllib.request.Request(
+        BASE + "/api/chat", data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def content_of(lines):
+    return "".join(json.loads(l)["message"]["content"] for l in lines)
+
+
+TOKENS = ["Hall (2017) ", "argues that ", "language deprivation ",
+          "is a public health crisis."]
+GATE = threading.Event()
+
+
+def _streaming_question(model, question, history, bm25, chunks, meta, web, run):
+    sink = run.begin_answer()
+    sink(TOKENS[0])
+    GATE.wait(timeout=10)   # held until the test has READ that first token
+    for tok in TOKENS[1:]:
+        sink(tok)
+    _brain.LAST_CHAT_STATS = {"prompt_eval_count": 321, "eval_count": 77,
+                              "total_duration": 12345}
+    return "".join(TOKENS), SOURCES[0]
+
+
+_brain.handle_question = _streaming_question
+try:
+    GATE.clear()
+    resp = stream_post({"messages": [{"role": "user", "content": "q"}],
+                        "stream": True})
+    first = resp.readline().decode("utf-8")
+    early = json.loads(first)
+    # The proof that this is a live stream and not a replay: the first frame is
+    # readable while the stub is still blocked, so the answer does not exist yet.
+    check("a token frame arrives BEFORE the answer is finished",
+          early["message"]["content"] == TOKENS[0] and early["done"] is False)
+    GATE.set()
+    lines = [first] + [l for l in resp.read().decode("utf-8").split("\n")
+                       if l.strip()]
+    resp.close()
+    check("live frames reassemble to the streamed tokens plus the footer",
+          content_of(lines) == "".join(TOKENS) + shim.wikilink_footer(SOURCES[0]))
+    check("one frame per token, not one frame for the whole answer",
+          len(lines) > len(TOKENS))
+    check("the live stream ends with a done frame",
+          json.loads(lines[-1])["done"] is True)
+    check("no live content line carries the end-of-stream substring",
+          all("done_reason" not in l for l in lines[:-1]))
+    check("the done frame reports the REAL counters from brain.LAST_CHAT_STATS",
+          json.loads(lines[-1])["eval_count"] == 77
+          and json.loads(lines[-1])["prompt_eval_count"] == 321)
+except Exception as exc:
+    check("live token streaming works (raised %r)" % (exc,), False)
+finally:
+    GATE.set()
+    _brain.LAST_CHAT_STATS = {}
+
+
+# A single TOKEN that is the sentinel. Cross-token splits are safe by
+# construction (each NDJSON line is its own message), but one frame carrying the
+# whole substring would truncate the answer.
+SENTINEL_TEXT = 'The final frame sets "done_reason": "stop" and stops.'
+
+
+def _sentinel_question(model, question, history, bm25, chunks, meta, web, run):
+    run.begin_answer()(SENTINEL_TEXT)
+    return SENTINEL_TEXT, []
+
+
+_brain.handle_question = _sentinel_question
+try:
+    status, text, _ = post("/api/chat", {"messages": [{"role": "user", "content": "q"}],
+                                         "stream": True})
+    lines = [l for l in text.split("\n") if l.strip()]
+    check("a streamed token quoting \"done_reason\" does not truncate the stream",
+          all("done_reason" not in l for l in lines[:-1]))
+    check("...and that token's text survives the split byte for byte",
+          content_of(lines) == SENTINEL_TEXT)
+except Exception as exc:
+    check("a streamed done_reason token is split safely (raised %r)" % (exc,), False)
+
+
+# Tokens already went out, so the response cannot become a 4xx: the failure has
+# to ride out as content plus a normal done frame.
+def _boom_midstream(model, question, history, bm25, chunks, meta, web, run):
+    run.begin_answer()("partial answer so far ")
+    raise RuntimeError("ollama died mid-generation")
+
+
+_brain.handle_question = _boom_midstream
+try:
+    status, text, _ = post("/api/chat", {"messages": [{"role": "user", "content": "q"}],
+                                         "stream": True})
+    lines = [l for l in text.split("\n") if l.strip()]
+    check("a brain that raises MID-STREAM still ends 200 with a done frame",
+          status == 200 and json.loads(lines[-1])["done"] is True)
+    check("...and keeps the tokens the user already watched arrive",
+          "partial answer so far " in content_of(lines))
+    check("...without re-sending a diverged answer on top of them",
+          content_of(lines).count("partial answer so far") == 1)
+except Exception as exc:
+    check("a mid-stream failure closes the stream cleanly (raised %r)" % (exc,), False)
+
+_brain.handle_question = _handle_question
+
+
+# The escape hatch: SHIM_STREAM_LIVE=0 restores the pre-streaming behaviour.
+shim.STREAM_LIVE = False
+try:
+    status, text, hdrs = post("/api/chat", {"messages": [{"role": "user", "content": "q"}],
+                                            "stream": True})
+    lines = [l for l in text.split("\n") if l.strip()]
+    check("SHIM_STREAM_LIVE=0 still answers a well-formed NDJSON stream",
+          status == 200 and json.loads(lines[-1])["done"] is True
+          and content_of(lines).startswith(ANSWER[0]))
+    check("...with a Content-Length, not chunked",
+          hdrs.get("Content-Length") is not None)
+except Exception as exc:
+    check("SHIM_STREAM_LIVE=0 falls back cleanly (raised %r)" % (exc,), False)
+shim.STREAM_LIVE = True
 
 
 # ---- auth ------------------------------------------------------------------
