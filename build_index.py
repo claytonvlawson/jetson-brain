@@ -801,7 +801,15 @@ def extract_urls(text):
 # and license .md files do not pollute BM25 statistics. Pruned in-place during
 # os.walk so the walker never descends into them (handles arbitrary nesting such
 # as Publishing/docx/node_modules/... and LanguageDeprivationAgent/agent/.venv/...).
-_JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv"}
+#
+# "Templates" is Obsidian scaffolding rather than a build artifact, but it fails
+# the same test: three of its four notes carry an unrendered "{{title}}" as their
+# H1 over a stub body, so every chunk they contribute is placeholder syntax that
+# can only displace a real note. deploy.sh also stops shipping the folder, but
+# rsync's --delete deliberately spares excluded paths, so any Templates/ already
+# on the device would otherwise be indexed forever. Pruning here is what actually
+# keeps it out of the index.
+_JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv", "Templates"}
 
 
 def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,

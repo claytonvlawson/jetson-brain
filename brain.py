@@ -770,7 +770,7 @@ MULTI_MAX_PER_SOURCE = _env_int("BRAIN_MULTI_MAX_PER_SOURCE", 2)
 DEFAULT_MAX_PER_SOURCE = _env_int("BRAIN_MAX_PER_SOURCE", 0)
 
 # Boost the reference notes on an ANALYTIC default-persona question. 0.0 keeps
-# the ranker exactly as it is, so this is inert until an arm sets it.
+# the ranker exactly as it is.
 #
 # Measured on the device 2026-08-16 over retrieval_gold: three of the four
 # in_context misses share one cause, and it is not the window. critical_period_1
@@ -786,7 +786,29 @@ DEFAULT_MAX_PER_SOURCE = _env_int("BRAIN_MAX_PER_SOURCE", 0)
 # The prefix table is deliberately the scholar one plus the two legal sources:
 # _apply_prefix_boost already exists for precisely this operation, and a second
 # copy of that loop would be a second place for the numbers to drift.
-DEFAULT_ANALYTIC_BOOST = 0.0
+#
+# SWEPT 2026-08-16 against a frozen bm25.V4.pkl, seed pinned, temperature 0, one
+# variable. The 1.0 this was going to ship at is INERT: both design targets hold
+# rank 11 and 12 exactly, unmoved, and the set stays at 36/40. A flat +1.0 is
+# simply too small to cross the parent-register notes stacked above them.
+#
+#   boost   in_context  MRR     gained                 lost
+#   0.0     36/40       0.6351  --                     --
+#   1.0     36/40       0.6380  --                     --      <- no-op
+#   1.5     37/40       0.6399  critical_period_1      --
+#   2.0     37/40       0.6410  critical_period_1      --      <- shipped
+#   3.0     37/40       0.6429  critical_period_1      --
+#   5.0     37/40       0.6539  + interpreting_access_2 gallaudet_2
+#   8.0     36/40       0.6517  + interpreting_access_2 gallaudet_2, legal_recognition_1
+#
+# 1.5 to 3.0 is the band that gains without giving anything back: it lifts
+# critical_period_1 from rank 11 to 4 and moves nothing else across the window
+# edge. Past 5.0 the boost stops being a nudge and starts being an override --
+# it drags interpreting_access_2 in but pushes gallaudet_2 (rank 4, a row that
+# was already correct) out, and by 8.0 it evicts legal_recognition_1 too, back
+# to where it started. 2.0 sits in the middle of the safe band rather than at
+# its edge, so ordinary index churn cannot walk it into the lossy region.
+DEFAULT_ANALYTIC_BOOST = 2.0
 try:
     DEFAULT_ANALYTIC_BOOST = float(os.environ["BRAIN_ANALYTIC_BOOST"])
 except (KeyError, ValueError):
@@ -3003,8 +3025,9 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
         scores = _apply_prefix_boost(scores, chunks, _SCHOLAR_SOURCE_PREFIXES,
                                      SCHOLAR_BOOST)
     elif DEFAULT_ANALYTIC_BOOST and intent == "analytic":
-        # Inert at the shipped 0.0. See DEFAULT_ANALYTIC_BOOST for the three
-        # measured misses this exists to reach.
+        # Live at the shipped 2.0, worth +1 in_context. See the swept table at
+        # DEFAULT_ANALYTIC_BOOST: 1.0 is a no-op, past 5.0 it starts evicting
+        # rows that were already right.
         scores = _apply_prefix_boost(scores, chunks,
                                      _REFERENCE_SOURCE_PREFIXES,
                                      DEFAULT_ANALYTIC_BOOST)

@@ -58,9 +58,20 @@ echo "==> Syncing vault markdown (md only) to ${REMOTE}/vault/ ..."
 # (web fetches and approved research-agent notes); excluding them keeps
 # --delete from destroying them and keeps the Mac copy (research-pull.sh)
 # from round-tripping back.
+#
+# Templates/ is Obsidian scaffolding, not content. Three of its four notes
+# carry an unrendered "{{title}}" as their H1 and a stub body, so indexing
+# them adds chunks whose text is placeholder syntax -- noise that can only
+# ever displace a real note in the ranking. Excluding it here keeps the
+# device vault a mirror of what the brain should know, but note that this
+# line alone would NOT have fixed the bug: --delete deliberately spares
+# excluded paths, so a Templates/ already on the device stays there. The
+# prune in build_index.py:_JUNK_DIR_NAMES is what actually keeps it out of
+# the index. Both are deliberate; neither is redundant.
 rsync -az --delete --prune-empty-dirs \
   --exclude='_WebCache/' \
   --exclude='_Research/' \
+  --exclude='Templates/' \
   --include='*/' --include='*.md' --exclude='*' \
   "${VAULT_SRC}/" "${JETSON}:${REMOTE}/vault/"
 
