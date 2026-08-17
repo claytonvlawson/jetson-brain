@@ -80,6 +80,26 @@ case "$state" in
     ;;
 esac
 
+# ---- 1b. GlobalProtect route contention (non-fatal) ---------------------
+# This Mac is Jamf-managed and ships with Palo Alto GlobalProtect, another
+# network extension. The two normally coexist, but if GP connects and claims
+# the default route (or hands out an address in 100.64.0.0/10, which collides
+# with the tailnet range directly) the symptom is "the Jetson went offline"
+# with no other clue. Cheap to check, invisible if you do not.
+if pgrep -q -f PanGPS 2>/dev/null; then
+  gp_iface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')"
+  if [[ "$gp_iface" == utun* ]]; then
+    note "note: GlobalProtect appears to hold the default route (${gp_iface})."
+    note "      If the Jetson is unreachable, disconnect GP and re-run."
+  fi
+  if ifconfig 2>/dev/null | grep -qE 'inet 100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.'; then
+    if ! ifconfig 2>/dev/null | grep -q 'inet 100.72.223'; then
+      note "note: something holds a 100.64.0.0/10 address that is not Tailscale."
+      note "      GlobalProtect and the tailnet are fighting over CGNAT space."
+    fi
+  fi
+fi
+
 # ---- 2. Our own node key has not expired --------------------------------
 if tailscale status --json 2>/dev/null | grep -q '"KeyExpiry"'; then
   note "note: this Mac still has a node key expiry set. Disable it at"

@@ -1,0 +1,64 @@
+// Target tailnet policy for login.tailscale.com/admin/acls
+//
+// Paste-and-compare, not paste-and-save. Your current policy is the Tailscale
+// default, which is allow-all: srcs ["*"], dsts ["*:*"]. Confirmed by reading
+// the compiled netmap on the Jetson: PacketFilter Srcs = 100.64.0.0/10 (the
+// whole CGNAT range), Dsts = 0.0.0.0/0 ports 0-65535.
+//
+// That matters here because brain_web.py listens on 100.x.x.x:8899 with no
+// authentication of any kind (grep -inE 'auth|token|password|Bearer|401'
+// returns nothing) and brain_ollama_shim.py runs with an empty SHIM_TOKEN.
+// Right now the only thing standing between those and any device on the tailnet
+// is that there are no other devices. Adding the Mac changes that arithmetic.
+//
+// EDIT THIS WITH THE USB-C CABLE PLUGGED IN. A policy mistake locks you out of
+// the Jetson remotely, and the cable is the only recovery.
+
+{
+  // Everything you own can reach everything you own. This is still broad, but
+  // it is scoped to your identity instead of to the entire CGNAT range, so a
+  // shared or tagged node added later is not automatically inside.
+  "acls": [
+    {
+      "action": "accept",
+      "src":    ["autogroup:member"],
+      "dst":    ["autogroup:self:*"],
+    },
+  ],
+
+  // THE IMPORTANT PART.
+  //
+  // The default ssh block ships with "action": "check", which is why this file
+  // exists. With check, tailscaled intercepts tailnet-sourced port 22 before
+  // sshd ever sees it: your authorized_keys is not consulted, the host key
+  // presented is Tailscale-generated rather than the Jetson's, and the
+  // connection stalls waiting for interactive BROWSER re-authentication.
+  //
+  // An interactive human can click through that. The tunnel LaunchAgent runs
+  // ssh with BatchMode=yes and cannot, so it would fail, retry every 10s, and
+  // Obsidian would spin forever with no visible cause.
+  //
+  // "accept" removes the browser step. Key-based auth still applies, because
+  // sshd is still what terminates the session for non-tailnet paths and
+  // Tailscale SSH still validates node identity against the control plane.
+  "ssh": [
+    {
+      "action": "accept",
+      "src":    ["autogroup:member"],
+      "dst":    ["autogroup:self"],
+      "users":  ["autogroup:nonroot", "snowbeach"],
+    },
+  ],
+
+  // Optional, and worth doing separately once the above is proven. If you ever
+  // want the Jetson reachable by a device that is NOT yours (a collaborator, a
+  // shared node), replace the blanket rule above with per-port grants so the
+  // unauthenticated services stay invisible:
+  //
+  //   {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:jetson:22"]},
+  //
+  // and tag the Jetson. Tagging has a second benefit: tagged nodes do not have
+  // key expiry at all, which removes the 2027-01-07 problem structurally rather
+  // than by remembering to click a toggle. The cost is that tagging changes who
+  // owns the node, so do it deliberately and with the cable attached.
+}
