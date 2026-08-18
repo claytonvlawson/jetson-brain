@@ -1141,7 +1141,14 @@ def load_index():
     # is duplicate. Interning collapses them to one object per distinct token.
     # Hash and equality are unchanged, so every BM25 score is bit-for-bit the
     # same; this buys memory only, and costs one pass over the corpus at load.
-    tokenized = [[sys.intern(t) for t in doc] for doc in tokenized]
+    # In place, one document at a time: the whole-corpus comprehension this
+    # replaces held a second complete token list alongside the first and
+    # pushed peak RSS UP by ~3 MB while lowering steady state, which on a box
+    # that OOMs is the wrong trade. Rebinding per document keeps the extra
+    # allocation to a single doc.
+    tokenized = list(tokenized)
+    for _i, _doc in enumerate(tokenized):
+        tokenized[_i] = [sys.intern(_t) for _t in _doc]
     if not chunks or len(chunks) != len(tokenized):
         print("The index looks empty or corrupt.")
         print("Rebuild it with:  python3 " + os.path.join(BRAIN_ROOT, "build_index.py"))
