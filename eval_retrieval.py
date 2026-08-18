@@ -271,6 +271,13 @@ def env_fingerprint(meta, chunks, rows=None):
         # environment at import time, so these are what the code WILL DO --
         # which is the only thing worth fingerprinting.
         "BRAIN_HYBRID": _flag(brain.HYBRID_ENABLED),
+        # BRAIN_HYBRID=0 alone is not a lexical arm: it falls back to BM25 +
+        # the query-time embedding rerank, so the "no dense" arm still embeds
+        # RERANK_CAND_N chunks per query. Two runs that differ only in whether
+        # the rerank ran would otherwise emit byte-identical headers while
+        # measuring different retrievers, which is precisely the mislabelling
+        # the comment above is about.
+        "BRAIN_RERANK": _flag(brain._RERANK_ENABLED),
         "BRAIN_DECOMPOSE": _flag(brain.DECOMPOSE_ENABLED),
         # HyDE IS reachable from retrieve_context, unlike the obsidian flags,
         # so this arm genuinely moves the numbers below.
@@ -334,9 +341,10 @@ def main():
           % (fp["index"], fp["chunks"], fp["tokenizer_version"],
              fp["dense_model"], fp["dense_dim"], fp["dense_rows"],
              fp["embed_prefix_version"]))
-    print("arms: HYBRID=%s DECOMPOSE=%s HYDE=%s TOP_K_FAST=%s ANN=%s "
+    print("arms: HYBRID=%s RERANK=%s DECOMPOSE=%s HYDE=%s TOP_K_FAST=%s ANN=%s "
           "OBSIDIAN_RANK=%s OBSIDIAN_BLOCKS=%s"
-          % (fp["BRAIN_HYBRID"], fp["BRAIN_DECOMPOSE"], fp["BRAIN_HYDE"],
+          % (fp["BRAIN_HYBRID"], fp["BRAIN_RERANK"],
+             fp["BRAIN_DECOMPOSE"], fp["BRAIN_HYDE"],
              fp["BRAIN_TOP_K_FAST"], fp["BRAIN_ANN"],
              fp["BRAIN_OBSIDIAN_RANK"], fp["BRAIN_OBSIDIAN_BLOCKS"]))
     print("persona=%s seed=%s ann_seed=%s"

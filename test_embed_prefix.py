@@ -124,6 +124,43 @@ try:
 finally:
     build_index._load_embed_fns = _real
 
+# -- the round trip THROUGH _prep_dense --------------------------------------
+# The checks above pin the two tables against each other and pin _query_prefix
+# on a hand-built dict. Neither touches the dict brain.py actually passes to
+# _query_prefix at query time, and that gap hid a real defect: _prep_dense
+# rebuilt the meta from scratch and dropped prefix_version, so a prefixed index
+# was queried unprefixed. Every check in this file passed the whole time. So
+# assert the contract end to end, on the real prepared meta.
+import array   # noqa: E402
+
+_DIM = 4
+_chunks = [{"id": "c%d" % i, "text": "t%d" % i} for i in range(3)]
+
+
+def _prepared(prefix_version):
+    dense = {"model": "m", "dim": _DIM, "ids": [c["id"] for c in _chunks],
+             "buf": array.array("f", [0.5] * (_DIM * len(_chunks)))}
+    if prefix_version is not None:
+        dense["prefix_version"] = prefix_version
+    return brain._prep_dense(dense, _chunks)
+
+
+for _v, _want in (("none", ""),
+                  ("nomic-v1", "search_query: ")):
+    _meta = _prepared(_v)
+    check_true("_prep_dense accepts %r" % _v, _meta is not None)
+    if _meta is not None:
+        check("_prep_dense preserves %r" % _v, _meta.get("prefix_version"), _v)
+        check("query prefix survives _prep_dense for %r" % _v,
+              brain._query_prefix(_meta), _want)
+
+# A legacy block with no prefix_version key must still prepare, and must read
+# back as the verbatim scheme rather than as a missing key.
+_legacy = _prepared(None)
+check_true("_prep_dense accepts a legacy block", _legacy is not None)
+if _legacy is not None:
+    check("legacy block reads as none", brain._query_prefix(_legacy), "")
+
 # -- report ------------------------------------------------------------------
 if FAILURES:
     print("FAIL (%d)" % len(FAILURES))

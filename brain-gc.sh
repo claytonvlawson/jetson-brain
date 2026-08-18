@@ -27,6 +27,9 @@ set -uo pipefail
 # qwen2.5:7b        DEEP_MODEL      (brain.py) -- /deep
 # nomic-embed-text  RERANK_EMBED_MODEL (brain.py) -- embeddings, hybrid retrieval, router
 # qwen2.5:0.5b      NOT the brain's: ~/ncdd-rag/ncdd_rag.py depends on it. Keep it.
+# qwen3-embedding:0.6b was A/B'd against nomic 2026-08-18 and LOST (28 vs 31/40 on
+# retrieval_gold) at 4.4x the cost on both the query hot path and rebuild time.
+# Deliberately NOT kept: if it ever reappears here, gc should reclaim it.
 KEEP_MODELS="${KEEP_MODELS:-llama3.2:3b qwen2.5:7b nomic-embed-text qwen2.5:0.5b}"
 
 BRAIN="${BRAIN:-/mnt/nvme/brain}"
