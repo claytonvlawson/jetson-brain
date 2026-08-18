@@ -89,7 +89,7 @@ QUEUE_TIMEOUT = float(os.environ.get("SHIM_QUEUE_TIMEOUT", "120"))  # deep model
 # Live token streaming. SHIM_STREAM_LIVE=0 falls back to the original behaviour
 # (answer fully, then replay it as frames), which is one env var away if a
 # client ever turns out to dislike a chunked response.
-STREAM_LIVE = os.environ.get("SHIM_STREAM_LIVE", "1") not in ("0", "false", "False", "no")
+STREAM_LIVE = os.environ.get("SHIM_STREAM_LIVE", "1") not in ("0", "false", "False", "no", "")
 # Retrieval runs for seconds before the first token exists. An empty-content
 # frame every HEARTBEAT_S keeps the connection warm through that silence and is
 # what makes a client disconnect visible while nothing is being generated.
@@ -99,7 +99,7 @@ HEARTBEAT_S = float(os.environ.get("SHIM_HEARTBEAT", "15"))
 STREAM_DEADLINE = float(os.environ.get("SHIM_STREAM_DEADLINE", "600"))
 # Append the cited notes as an Obsidian [[wikilink]] block so an answer copied
 # into a note is already linked into the graph. SHIM_LINKS=0 turns it off.
-LINKS_ENABLED = os.environ.get("SHIM_LINKS", "1") not in ("0", "false", "False", "no")
+LINKS_ENABLED = os.environ.get("SHIM_LINKS", "1") not in ("0", "false", "False", "no", "")
 
 # Model names the plugin's dropdown shows. Keeping them ":latest"-suffixed makes
 # them look like ordinary Ollama tags, which is what the plugin (and the user

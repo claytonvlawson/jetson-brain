@@ -372,7 +372,7 @@ _RERANK_VECS = {}            # chunk key -> normalized embedding (in-process mem
 # slower for it). Without a second gate there is no way to measure what BM25
 # alone actually retrieves, which makes "dense vs BM25" unanswerable. Default
 # stays on: this is a measurement gate, not a feature.
-_RERANK_ENABLED = os.environ.get("BRAIN_RERANK", "1") not in ("0", "false", "False", "no")
+_RERANK_ENABLED = _env_flag("BRAIN_RERANK", "1")
 
 # ---- Hybrid dense + BM25 retrieval (Reciprocal Rank Fusion) ----------------
 # When the loaded index carries a dense block (build_index.py --embed), each
@@ -387,7 +387,7 @@ _RERANK_ENABLED = os.environ.get("BRAIN_RERANK", "1") not in ("0", "false", "Fal
 # BRAIN_HYBRID=0, handle_question falls back to the exact BM25 + rerank path, so
 # an un-embedded index (and the A/B baseline) behaves precisely as before. The
 # env gate lets one dense index be measured both ways: BRAIN_HYBRID=0 vs =1.
-HYBRID_ENABLED = os.environ.get("BRAIN_HYBRID", "1") not in ("0", "false", "False", "no")
+HYBRID_ENABLED = _env_flag("BRAIN_HYBRID", "1")
 RRF_K = 60          # standard RRF damping constant; larger flattens rank weighting
 RRF_POOL = 60       # fuse this many top docs from each ranker
 DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
@@ -438,7 +438,7 @@ DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
 # versus 0.07s, ~48x, entirely the extra 3B generation, measured on Metal. The
 # 8GB Orin will be worse. Set BRAIN_HYDE=0 to buy that latency back at the cost
 # of three questions.
-HYDE_ENABLED = os.environ.get("BRAIN_HYDE", "1") not in ("0", "false", "False", "no")
+HYDE_ENABLED = _env_flag("BRAIN_HYDE", "1")
 HYDE_NUM_PREDICT = _env_int("BRAIN_HYDE_NUM_PREDICT", 96, lo=16, hi=512)
 HYDE_TIMEOUT = 30
 HYDE_SYSTEM = (
@@ -470,7 +470,7 @@ HYDE_SYSTEM = (
 # with no index rebuild. The same predicate is honored on the exact path too, so a
 # filter behaves identically whichever dense search runs. Env-configured by
 # default; callers may also pass an explicit predicate to _dense_scores.
-ANN_ENABLED      = os.environ.get("BRAIN_ANN", "0") not in ("0", "false", "False", "no")
+ANN_ENABLED      = _env_flag("BRAIN_ANN", "0")
 # nprobe default 20: on the current ~1.3k-row / ~36-cell index that is measured
 # LOSSLESS for what reaches the LLM -- the dense top-8 (>= every persona's keep_k)
 # matches the exact scan on all eval questions, and top-60 RRF-pool recall is
@@ -2606,7 +2606,7 @@ except (KeyError, ValueError):
 # Leave room for the answer (num_predict) plus chat-template overhead, so the
 # guard trims before llama.cpp has to.
 CTX_RESERVE_TOKENS = 768
-CTX_FIT_ENABLED = os.environ.get("BRAIN_CTX_FIT", "1") not in ("0", "false", "False", "no")
+CTX_FIT_ENABLED = _env_flag("BRAIN_CTX_FIT", "1")
 LAST_CTX_FIT = {}
 
 

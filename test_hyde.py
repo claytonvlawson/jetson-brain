@@ -38,7 +38,7 @@ Q = "Isn't a school only for deaf kids just holding them back?"
 # byte-identical across two runs. It still costs one extra 3B generation per
 # question (~48x the retrieval time on Metal), so BRAIN_HYDE=0 buys that back.
 check("HyDE defaults on", brain.HYDE_ENABLED,
-      os.environ.get("BRAIN_HYDE", "1") not in ("0", "false", "False", "no"))
+      os.environ.get("BRAIN_HYDE", "1") not in ("0", "false", "False", "no", ""))
 
 # -- the happy path ----------------------------------------------------------
 calls = []

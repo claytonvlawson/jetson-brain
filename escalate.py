@@ -47,7 +47,7 @@ CONNECT_TIMEOUT = float(os.environ.get("ESCALATE_CONNECT_TIMEOUT", "5"))
 
 
 def _flag(name, default="0"):
-    return os.environ.get(name, default) not in ("0", "false", "False", "no")
+    return os.environ.get(name, default) not in ("0", "false", "False", "no", "")
 
 
 ESCALATE_ENABLED = _flag("ESCALATE_ENABLED", "1")
