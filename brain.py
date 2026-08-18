@@ -109,34 +109,58 @@ DEEP_MODEL = "qwen2.5:7b"
 # context window and a low temperature for grounded answers.
 GEN_OPTIONS = {
     "num_predict":    640,   # was 200, then 512 — room for fuller, fact-complete answers
-    "num_ctx":       8192,   # was 3072, 4096, then 6144 — see the measurement below
+    "num_ctx":      24576,   # 3072 -> 4096 -> 6144 -> 8192 -> here; see the table below
     "temperature":    0.2,   # tighter citation adherence; BRAIN_TEMPERATURE overrides
     "repeat_penalty": 1.1,   # prevent looping on long outputs
     "num_gpu":        999,   # all layers on GPU, no CPU offload
 }
 
-# num_ctx was raised 6144 -> 8192 on measurement, not on intuition. Probing all
-# 40 retrieval_gold questions through the real path (retrieve_context ->
-# expand_with_links -> fit_context) showed the budget was binding hard:
+# num_ctx is raised on arithmetic and a memory probe, never on intuition. The
+# previous ceiling comment here rejected 12288 because the board "had ~1.0 GB
+# free". That was true when zram was compressing LLM float data and peaking near
+# 3 GB. zram is GONE: `zramctl` is empty and swap is now an 8 GiB NVMe swapfile,
+# so the board idles at 2.4 GiB used of 7.4 GiB with ~4.8 GiB available. The old
+# ceiling was correct when written and is no longer correct.
 #
-#   questions that lost a chunk to fit_context : 17 of 40 (42.5%)
-#   chunks dropped                             : 26 (up to 4 on one question)
-#   estimated prompt tokens min/mean/max       : 2909 / 4662 / 5371
-#   budget at num_ctx=6144                     : 5376
+# KV cache cost, from the device's own metadata (`ollama show --verbose`), NOT
+# from the model card. llama.cpp q8_0 is block-quantized -- 32 values per block,
+# 32 bytes of data plus one fp16 scale -- so it is 1.0625 bytes per value, not
+# 1.0. KV elements per token = 2 * n_layer * n_kv_head * head_dim.
 #
-# The max estimate landed 5 tokens under the budget, so retrieval was routinely
-# handing the model chunks that fit_context then threw away. Production sends
-# ~11 chunks, not TOP_K_FAST=8: expand_with_links adds roughly three more after
-# retrieval, and the old comment on this line still assumed a 6-chunk window.
+#   llama3.2:3b   block_count 28, head_count_kv 8, key/value_length 128
+#                 2 * 28 * 8 * 128 = 57,344 values -> 60,928 B/token (59.5 KiB)
+#   qwen2.5:7b    block_count 28, head_count_kv 4, head dim 3584/28 = 128
+#                 2 * 28 * 4 * 128 = 28,672 values -> 30,464 B/token (29.75 KiB)
 #
-# At 8192 the budget becomes 7424, which clears the observed 5371 maximum with
-# room to spare and takes the drop count to zero. The cost is KV cache: llama3.2
-# 3B is 28 layers x 8 KV heads x 128 head_dim, so 2 * 8 * 128 * 28 = 57344
-# values per token, and Ollama on the Jetson runs OLLAMA_KV_CACHE_TYPE=q8_0
-# (~1 byte/value), i.e. ~56 KB/token -- about 336 MB at 6144 and 448 MB at 8192.
-# The extra ~112 MB fits the ~1.0 GB the Orin had free with the 3B resident.
-# Do not raise this further without re-checking `free -m` on the device: the
-# same arithmetic puts 12288 at ~672 MB, which does not fit.
+# The 7B costs HALF what the 3B costs per token, because Qwen2.5 uses 4 KV heads
+# against Llama 3.2's 8. The deep tier is not the expensive one to widen.
+#
+#   num_ctx    3B KV      3B resident*   free, from ~5.0 GB
+#     8192     499 MB     ~2.9 GB        ~2.1 GB   (previous default)
+#    12288     749 MB     ~3.2 GB        ~1.8 GB
+#    16384     998 MB     ~3.4 GB        ~1.6 GB
+#    24576   1,497 MB     ~4.0 GB        ~1.0 GB   <- here
+#    32768   1,996 MB     ~4.6 GB        ~0.4 GB   (too tight)
+#
+#   * 2.0 GB of Q4_K_M weights + KV + ~0.4 GB compute buffer.
+#
+# THE WINDOW IS HEADROOM, NOT A TARGET. Two things break before memory does:
+#
+#   1. Prefill. A recorded arm shows ttft 10.3s at prompt_eval_count 3731.
+#      Actually filling 24k tokens would push time-to-first-token past
+#      SCHOLAR_DEADLINE_S (60.0) and toward the 120s semaphore timeout in
+#      brain_web.py. This is why TOP_K_* was deliberately NOT raised with the
+#      window; see the keep_k table below, which still governs.
+#   2. Retrieval has nothing more to give. Widening keep_k 8 -> 12 moved
+#      eval_retrieval not at all (36/40, identical MRR) with recall@8 =
+#      recall@10 = 36 and recall@20 = 39: the remaining targets sit at ranks
+#      13-20, where no amount of window reaches them.
+#
+# The window is bought for long sessions, /scholar multi-pass work and web
+# excerpts, not for a bigger pile of vault chunks. Every number above assumes
+# OLLAMA_KV_CACHE_TYPE=q8_0, which _assert_kv_cache_type() below now CHECKS
+# rather than trusting: at the f16 default every figure here nearly doubles.
+# Re-check `free -m` and `ollama ps` on the device before raising further.
 try:
     GEN_OPTIONS["num_ctx"] = int(os.environ["BRAIN_NUM_CTX"])
 except (KeyError, ValueError):
@@ -162,6 +186,69 @@ try:
 except (KeyError, ValueError):
     pass
 
+
+# The KV-cache arithmetic above assumes OLLAMA_KV_CACHE_TYPE=q8_0. That setting
+# lives in a systemd drop-in on the device, NOT in this repo, so for a long time
+# it was an unverified assumption sitting under every memory decision here. At
+# the f16 default the 3B's KV cache is 112 KiB/token instead of 59.5, which puts
+# num_ctx=24576 at ~2.75 GB of cache and the resident model near 5.2 GB -- over
+# budget on a 7.4 GB board, with no error message anywhere, just an OOM kill
+# that presents as empty answers still labelled served_by="rag".
+#
+# So: check it, cheaply, and say so. Reading the drop-ins needs no sudo and no
+# running daemon. Absent files mean we are not on the device (a Mac eval box,
+# say), which is silence, not a warning -- a check that cries wolf off-device
+# is a check people learn to ignore.
+_KV_CACHE_DROPIN_DIR = "/etc/systemd/system/ollama.service.d"
+_EXPECTED_KV_CACHE_TYPE = "q8_0"
+
+
+def _detect_kv_cache_type():
+    """The OLLAMA_KV_CACHE_TYPE the daemon will start with, or None if it cannot
+    be determined from this host. Last assignment wins, matching systemd's own
+    ordering over drop-ins read in lexical order."""
+    import glob
+    found = None
+    paths = sorted(glob.glob(os.path.join(_KV_CACHE_DROPIN_DIR, "*.conf")))
+    paths.append("/etc/systemd/system/ollama.service")
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for m in re.finditer(r'OLLAMA_KV_CACHE_TYPE\s*=\s*"?([A-Za-z0-9_]+)"?',
+                             text):
+            found = m.group(1)
+    return found
+
+
+def _warn_if_kv_cache_unexpected():
+    """Warn once, to stderr, if the device is not quantizing the KV cache.
+
+    Never raises and never blocks startup: this is a budget assumption being
+    audited, not a precondition. A brain that refuses to answer because it could
+    not read a systemd file would be a worse failure than the one it guards."""
+    try:
+        if not os.path.isdir(_KV_CACHE_DROPIN_DIR):
+            return None
+        actual = _detect_kv_cache_type()
+        if actual == _EXPECTED_KV_CACHE_TYPE:
+            return actual
+        sys.stderr.write(
+            "[brain] WARNING: OLLAMA_KV_CACHE_TYPE is %s, expected %s. "
+            "num_ctx=%d was budgeted assuming %s (~59.5 KiB/token for the 3B); "
+            "at f16 that cache roughly doubles and may not fit. See the KV table "
+            "in brain.py.\n"
+            % (actual or "unset", _EXPECTED_KV_CACHE_TYPE,
+               GEN_OPTIONS["num_ctx"], _EXPECTED_KV_CACHE_TYPE))
+        return actual
+    except Exception:
+        return None
+
+
+_warn_if_kv_cache_unexpected()
+
 # keep_alive per tier (8GB cannot hold both large models resident): the fast
 # model stays pinned (-1) for warm repeats; the deep 7B loads on demand and is
 # released a couple minutes after use so it never fights the fast model for VRAM.
@@ -173,6 +260,70 @@ def _keep_alive(model):
     """keep_alive for a chat call: the deep model is released after use, every
     other model stays pinned (single source of truth for all four call sites)."""
     return KEEP_ALIVE_DEEP if model == DEEP_MODEL else KEEP_ALIVE_FAST
+
+
+# Per-tier context window. The two tiers CANNOT share one num_ctx any more.
+# At the fast tier's 24576 the 3B is ~4.0 GB resident; qwen2.5:7b is 4.7 GB of
+# weights plus its own KV plus a compute buffer, about 5.4 GB at 8192. Handing
+# the 7B a 24576 window as well would ask for 4.0 + 6.1 = 10.1 GB on a 7.4 GB
+# board. Even at 8192 the pair sums to 9.4 GB, which is why _keep_alive above no
+# longer pins the fast model through a deep turn.
+#
+# 12288, not 8192, for deep: the 7B costs 29.75 KiB/token against the 3B's 59.5,
+# so 12288 on the deep tier buys a 50% wider window for 366 MB -- less than the
+# 3B pays for 6144. The deep tier is the CHEAP place to spend context.
+DEEP_NUM_CTX = 12288
+
+
+def _gen_options(model, **overrides):
+    """Generation options for a chat call, per tier.
+
+    Companion to _keep_alive(): same dispatch rule, same reason for existing.
+    Every call site that used to pass GEN_OPTIONS directly should pass this, so
+    a tier's window lives in exactly one place instead of being restated at each
+    of the four chat paths. Overrides are applied last, which is how the HyDE
+    and scholar-pass-2 calls narrow num_predict without forking the dict."""
+    opts = dict(GEN_OPTIONS)
+    if model == DEEP_MODEL:
+        opts["num_ctx"] = DEEP_NUM_CTX
+    opts.update(overrides)
+    return opts
+
+
+def _num_ctx(model):
+    """The context window this model will actually be given. Callers that BUDGET
+    a prompt must use this, not GEN_OPTIONS["num_ctx"], or they will budget the
+    fast tier's window against a deep-tier call and hand Ollama an over-long
+    prompt -- which it truncates from the TOP, taking the system prompt with it.
+    That is the exact silent failure fit_context() exists to prevent."""
+    return _gen_options(model)["num_ctx"]
+
+
+def _before_chat(model):
+    """Make room before a chat call. Called at the top of all three chat entry
+    points, so the memory rule lives beside _keep_alive/_gen_options instead of
+    being an invariant nobody enforces.
+
+    The fast model is pinned at keep_alive=-1 and stays resident forever. That
+    was free when the fast tier held ~2.9 GB, but at num_ctx=24576 it holds
+    ~4.0 GB, and qwen2.5:7b needs ~5.4 GB on top. 9.4 GB does not fit in 7.4 GB.
+    Ollama's own scheduler is supposed to evict for us, but its VRAM estimates
+    on Jetson unified memory are what put this board into the OOM killer once
+    already, and an eviction it declines to make is an OOM we cannot see coming.
+    So a deep turn explicitly releases the fast model first, with keep_alive=0.
+
+    Best-effort by design: a failure here means the old behaviour, not a dead
+    turn, so it must never raise into the answer path."""
+    if model != DEEP_MODEL:
+        return
+    try:
+        requests.post(
+            OLLAMA_HOST + "/api/generate",
+            json={"model": FAST_MODEL, "keep_alive": 0},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 # Retrieval depth per tier: fast stays lean for speed, deep pulls more context
 # for grounding. handle_question does its own tiered retrieval inline.
@@ -1768,7 +1919,7 @@ def hyde_hypothesis(question, model=None, tm=None):
     optional extra ranker, so a dead or slow generation must degrade retrieval
     to exactly the non-HyDE path rather than take the turn down with it."""
     try:
-        opts = dict(GEN_OPTIONS)
+        opts = _gen_options(model or FAST_MODEL)
         opts["num_predict"] = HYDE_NUM_PREDICT
         # Greedy. A hypothesis is a retrieval probe, not prose for a human, and
         # sampling it would make the whole retrieval ranking nondeterministic
@@ -1888,7 +2039,8 @@ def chat_once(model, messages, options=None, force_rest=False, timeout=None):
     real one; timeout overrides that path's 120s default. Every pre-existing
     call site passes neither and gets the exact same two-path behaviour.
     """
-    _opts = options if options is not None else GEN_OPTIONS
+    _opts = options if options is not None else _gen_options(model)
+    _before_chat(model)
     if not force_rest:
         try:
             import ollama
@@ -1936,10 +2088,12 @@ def chat_stream(model, messages, sink=None):
             sys.stdout.write(piece)
             sys.stdout.flush()
 
+    _before_chat(model)
+    _opts = _gen_options(model)
     try:
         import ollama
         _ka = _keep_alive(model)
-        for part in ollama.chat(model=model, messages=messages, stream=True, options=GEN_OPTIONS, keep_alive=_ka):
+        for part in ollama.chat(model=model, messages=messages, stream=True, options=_opts, keep_alive=_ka):
             piece = ""
             _capture_chat_stats(part)   # the final part carries the counters
             msg = part.get("message") if isinstance(part, dict) else getattr(part, "message", None)
@@ -1967,7 +2121,7 @@ def chat_stream(model, messages, sink=None):
         import requests
         with requests.post(
             OLLAMA_HOST + "/api/chat",
-            json={"model": model, "messages": messages, "stream": True, "options": GEN_OPTIONS, "keep_alive": _keep_alive(model)},
+            json={"model": model, "messages": messages, "stream": True, "options": _opts, "keep_alive": _keep_alive(model)},
             stream=True,
             timeout=120,
         ) as resp:
@@ -2043,11 +2197,12 @@ def chat_stream_holdback(model, messages, decide, begin_stream,
         sink("".join(collected))
         return False
 
+    _before_chat(model)
     try:
         import ollama
         _ka = _keep_alive(model)
         stream = ollama.chat(model=model, messages=messages, stream=True,
-                             options=GEN_OPTIONS, keep_alive=_ka)
+                             options=_gen_options(model), keep_alive=_ka)
         try:
             for part in stream:
                 _capture_chat_stats(part)   # the final part carries the counters
@@ -2535,18 +2690,26 @@ def format_web_context(excerpts):
 # error anywhere. Widening the retrieval window makes that reachable, so the
 # guard ships with the wider window rather than after it.
 #
-# CHARS_PER_TOKEN is deliberately pessimistic. This vault's chunks average ~3.9
-# chars/token, but they are dense with proper nouns, wikilink syntax and heading
-# breadcrumbs that tokenize short, so assuming 3.4 leaves the estimate on the
-# safe side. The cost of overestimating is one dropped tail chunk; the cost of
-# underestimating is a silently ungrounded answer.
-CHARS_PER_TOKEN = 3.4
-# Measured on the device, 2026-08-16, over the 40 retrieval_gold prompts through
-# the real path, against Ollama's own prompt_eval_count (num_predict=1, so
-# prefill only): the true ratio is 4.25 min / 4.61 mean / 4.77 max. 3.4 is
-# therefore ~35% pessimistic, and the pessimism is not free -- it is spent
-# dropping tail chunks that would have fit. Overridable so an arm can be priced
-# without an edit; see BRAIN_TOP_K_FAST, whose ceiling was set by this estimator.
+# CHARS_PER_TOKEN stays pessimistic, but only as pessimistic as the measurement
+# supports. Measured on the device, 2026-08-16, over the 40 retrieval_gold
+# prompts through the real path, against Ollama's own prompt_eval_count
+# (num_predict=1, so prefill only): the true ratio is 4.25 min / 4.61 mean /
+# 4.77 max. The long-standing 3.4 was therefore ~35% pessimistic, and that
+# pessimism was not free -- it was spent dropping tail chunks that would have
+# fit, on a window that was already half empty (a live 8192 arm records
+# prompt_eval_count 3731).
+#
+# 4.0, not 4.25: it sits strictly UNDER the measured minimum, so the estimate is
+# still an over-count on every prompt observed, while recovering most of the
+# wasted budget. The asymmetry is the whole reason this constant is biased at
+# all -- overestimating costs one dropped tail chunk, underestimating costs a
+# silently ungrounded answer, because Ollama truncates from the TOP and takes
+# the system prompt with it. Do not raise this to or past 4.25 without a fresh
+# prompt_eval_count measurement on the model actually in use: the ratio is a
+# property of the TOKENIZER, so swapping the fast model invalidates it.
+CHARS_PER_TOKEN = 4.0
+# Overridable so an arm can be priced without an edit; see BRAIN_TOP_K_FAST,
+# whose ceiling was set by this estimator.
 try:
     CHARS_PER_TOKEN = float(os.environ["BRAIN_CHARS_PER_TOKEN"])
 except (KeyError, ValueError):
@@ -2979,7 +3142,7 @@ def _run_skill_loop(model, question, bm25, chunks, meta, web_enabled, persona,
             return [chunks[i] for i in order[:keep_k]]
 
         def _chat_select(m, messages):
-            opts = dict(GEN_OPTIONS)
+            opts = _gen_options(m)
             opts.update(brain_skills.SELECT_GEN_OPTIONS)
             return chat_once(m, messages, options=opts)
 
@@ -3492,15 +3655,16 @@ def _scholar_second_pass(model, question, bm25, chunks, meta, context_chunks,
                 + "\n\nAdd only what the draft does not already state.")
         send_chunks, _fit2 = fit_context(question, new_chunks,
                                          (system_prompt or "") + tail,
-                                         linked_ids)
+                                         linked_ids, num_ctx=_num_ctx(model))
         messages = [{"role": "system", "content": system_prompt},
                     {"role": "user",
                      "content": build_first_pass_user(question, send_chunks,
                                                       linked_ids) + tail}]
         # Same num_ctx as pass 1: a second sequential call is free in VRAM only
         # at the same window, because the KV cache is already allocated for it.
+        # _gen_options(model) preserves that, since it resolves the SAME tier.
         expansion = (chat_once(model, messages,
-                               options=dict(GEN_OPTIONS, num_predict=320),
+                               options=_gen_options(model, num_predict=320),
                                force_rest=True, timeout=90) or "").strip()
         if (not expansion or expansion.startswith("[error]")
                 or _is_insufficient(expansion)):
@@ -3606,7 +3770,8 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     # so this is the real, final list.
     _hist_text = "".join((m.get("content") or "") for m in _hist)
     context_chunks, _fit = fit_context(
-        question, context_chunks, system_prompt + _hist_text, linked_ids)
+        question, context_chunks, system_prompt + _hist_text, linked_ids,
+        num_ctx=_num_ctx(model))
     LAST_CTX_FIT.clear()
     LAST_CTX_FIT.update(_fit)
     if _fit["dropped"]:

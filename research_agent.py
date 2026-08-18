@@ -228,6 +228,11 @@ def _ollama_json(prompt, system=SCORE_SYSTEM):
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": prompt}],
         "stream": False, "format": "json",
+        # num_ctx 2048 is DELIBERATE and must not be swept up into a "make the
+        # windows consistent" pass. This is a small structured-extraction call
+        # over one short document, not an answer over vault context, and a
+        # narrow window here is what keeps the background research timer from
+        # allocating a second large KV cache beside the pinned answer model.
         "options": {"temperature": 0.0, "num_ctx": 2048, "num_predict": 200},
     }
     try:
