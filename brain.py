@@ -440,7 +440,6 @@ DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
 # of three questions.
 HYDE_ENABLED = _env_flag("BRAIN_HYDE", "1")
 HYDE_NUM_PREDICT = _env_int("BRAIN_HYDE_NUM_PREDICT", 96, lo=16, hi=512)
-HYDE_TIMEOUT = 30
 HYDE_SYSTEM = (
     "Write a short, plausible encyclopedia-style passage that would ANSWER the "
     "user's question. Two or three sentences. State it as fact, name the "
@@ -3395,19 +3394,6 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
             "order": order, "order_full": order_full if order_full is not None
             else order, "keep_k": keep_k, "retrieved": retrieved,
             "mode": mode, "top_score": top_score, "n_subq": len(sub_rankings)}
-
-
-def _scholar_auto_hook(question, intent):
-    """UNREACHED ON PURPOSE. Nothing calls this.
-
-    The place a future BRAIN_SCHOLAR_AUTO would decide to promote a question to
-    the scholar persona on its own. It is a stub rather than an implementation
-    because auto-promotion changes what the DEFAULT persona does on questions
-    nobody asked to be deep, and the only honest way to buy that is an ablation
-    that prices scholar against default on the same battery. The flag is defined
-    (so an arm can record it) and wired to nothing (so it cannot silently move a
-    number). Delete this function or call it, but do not let it half-exist."""
-    raise NotImplementedError("BRAIN_SCHOLAR_AUTO is not implemented")
 
 
 def _scholar_read_frontmatter(source):
