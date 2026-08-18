@@ -412,7 +412,10 @@ def judge_isolated(question, answer, must_cover, must_not, judge_model, host, re
     must_cover = list(must_cover or [])
     must_not = list(must_not or [])
     if not must_cover:
-        return 100, [], [], None
+        # Not gradeable, and NOT a pass. This returned 100, which turned an
+        # unlabeled row into a silent free win. load_gold drops such rows now,
+        # so this is a backstop for any caller that builds rows itself.
+        return -1, ["NO_MUST_COVER"], [], None
     missing = []
     ok = 0
     for fact in must_cover:
@@ -449,7 +452,9 @@ def judge(question, answer, must_cover, must_not, judge_model, host, retries, ti
     must_cover = list(must_cover or [])
     must_not = list(must_not or [])
     if not must_cover:
-        return 100, [], [], None
+        # Same backstop as judge_isolated: no denominator means no score, not a
+        # free 100. See load_gold.
+        return -1, ["NO_MUST_COVER"], [], None
     cover_lines = "\n".join(str(i + 1) + ". " + f for i, f in enumerate(must_cover))
     not_lines = "\n".join(str(j + 1) + ". " + f for j, f in enumerate(must_not)) or "(none)"
     prompt = JUDGE_TEMPLATE.format(
@@ -530,8 +535,18 @@ def report_gaps(results, the_brain):
 def load_gold(path):
     """Read any gold .jsonl (gold_questions, factual_gold, multihop_gold, ...)
     into a list of dicts. Skips blank/comment lines and malformed rows (with a
-    stderr note). Returns [] if nothing loads. Never raises."""
+    stderr note). Returns [] if nothing loads. Never raises.
+
+    A row with NO must_cover fact is dropped, not loaded. The score is
+    100 * present / len(must_cover), so with no denominator the judges used to
+    short-circuit to a free 100, and a whole file of such rows scored a constant
+    100 while calling the judge zero times. retrieval_gold.jsonl (40 rows) and
+    depth_retrieval_gold.jsonl (8 rows) are exactly that: expect_sources
+    retrieval labels that belong to eval_retrieval.py, and their own header
+    says so. Pointed at either, eval_brain now loads nothing and main() exits 2
+    on the empty gold set rather than reporting a perfect score."""
     rows = []
+    ungradeable = []
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for n, line in enumerate(fh, 1):
@@ -548,9 +563,22 @@ def load_gold(path):
                 obj.setdefault("id", "q" + str(n))
                 obj.setdefault("must_cover", [])
                 obj.setdefault("must_not", [])
+                if not obj["must_cover"]:
+                    ungradeable.append(obj["id"])
+                    continue
                 rows.append(obj)
     except Exception as e:
         sys.stderr.write("could not read gold set: " + repr(e) + "\n")
+    if ungradeable:
+        shown = ", ".join(ungradeable[:10])
+        if len(ungradeable) > 10:
+            shown += ", ... (" + str(len(ungradeable) - 10) + " more)"
+        sys.stderr.write(
+            str(len(ungradeable)) + " row(s) in " + path + " carry no must_cover "
+            "facts and were NOT graded: " + shown + "\n"
+            "  A must_cover list is the only thing a score can be computed from.\n"
+            "  If this is a retrieval label file (expect_sources), grade it with\n"
+            "  eval_retrieval.py instead.\n")
     return rows
 
 
@@ -632,8 +660,16 @@ def print_report(results, threshold, elapsed, gold_path, model, judge_model):
     print("  questions      : " + str(n))
     print("  passed         : " + str(len(passed)) + " / " + str(n))
     print("  failed         : " + str(len(failed)))
-    if broke:
-        print("  judge failures : " + str(len(broke)) + " (judge unreachable, treat as env error)")
+    # A -1 has two causes now and they need different fixes: JUDGE_UNREACHABLE
+    # is an environment problem (restart Ollama), NO_MUST_COVER is a data defect
+    # in the gold file (nothing to grade against). Reporting both as "judge
+    # unreachable" sent the operator to restart a service over a bad row.
+    ungrad = [r for r in broke if "NO_MUST_COVER" in (r.get("errors") or [])]
+    envfail = [r for r in broke if r not in ungrad]
+    if envfail:
+        print("  judge failures : " + str(len(envfail)) + " (judge unreachable, treat as env error)")
+    if ungrad:
+        print("  ungradeable    : " + str(len(ungrad)) + " (no must_cover facts; a data defect, not a judge problem)")
     print("  lowest score   : " + str(worst))
     print("  mean score     : %.1f" % mean)
     print("  elapsed        : %.1fs" % elapsed)
@@ -1160,10 +1196,12 @@ def emit_and_verdict(args, results, gaps, elapsed):
     if any(r["score"] < 0 for r in results) and not any(0 <= r["score"] < args.threshold for r in results):
         return 4
 
-    # Same verdict for the isolated judge, which cannot signal -1: it degrades
-    # to "fact not present" per call, so a dead judge yields a plausible-looking
-    # all-zeros run. A majority of failed calls means the SCORES ARE INVALID and
-    # must not be read as a system result (see ISO_CALLS).
+    # Same verdict for the isolated judge, which cannot signal -1 for a TRANSPORT
+    # failure: it degrades to "fact not present" per call, so a dead judge yields
+    # a plausible-looking all-zeros run. A majority of failed calls means the
+    # SCORES ARE INVALID and must not be read as a system result (see ISO_CALLS).
+    # (It does return -1 for NO_MUST_COVER, but that is a data defect caught at
+    # load time, not a transport failure, and load_gold drops those rows first.)
     total_iso = ISO_CALLS["ok"] + ISO_CALLS["failed"]
     if total_iso and ISO_CALLS["failed"] > total_iso / 2:
         msg = ("JUDGE UNRELIABLE: %d of %d isolated judge calls failed. Scores in "
