@@ -146,22 +146,21 @@ def _atomic_write_text(path: str, data: str) -> bool:
     up on failure. Returns True on success, False otherwise. Never raises."""
     tmp = None
     try:
-        directory = os.path.dirname(path)
+        # "or ." because dirname("bare.md") is "", and makedirs("") raises
+        # FileNotFoundError -- so a bare relative filename failed the write
+        # here while succeeding in web_paths' copy of this same function.
+        directory = os.path.dirname(path) or "."
         os.makedirs(directory, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(data)
-                fh.flush()
-                try:
-                    os.fsync(fh.fileno())
-                except Exception:
-                    # fsync is best-effort; a filesystem that rejects it must
-                    # not fail the write.
-                    pass
-        except Exception:
-            # fdopen took ownership of fd; nothing more to close here.
-            raise
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except Exception:
+                # fsync is best-effort; a filesystem that rejects it must
+                # not fail the write.
+                pass
         os.replace(tmp, path)
         return True
     except Exception:
