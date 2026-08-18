@@ -1136,6 +1136,13 @@ def load_index():
         # pickle. Rebuild it from chunk text with the same tokenizer as build.
         # (build_index skips empty-token chunks, so no doc is empty here.)
         tokenized = [tokenize(c.get("text") or "") for c in chunks]
+    # BM25Okapi keeps every token as a key in its per-document doc_freqs dict,
+    # so an uninterned corpus holds one str object per (token, document) pair:
+    # 169k objects for 12.6k distinct tokens on this vault, 7.9 MB of which 7.3
+    # is duplicate. Interning collapses them to one object per distinct token.
+    # Hash and equality are unchanged, so every BM25 score is bit-for-bit the
+    # same; this buys memory only, and costs one pass over the corpus at load.
+    tokenized = [[sys.intern(t) for t in doc] for doc in tokenized]
     if not chunks or len(chunks) != len(tokenized):
         print("The index looks empty or corrupt.")
         print("Rebuild it with:  python3 " + os.path.join(BRAIN_ROOT, "build_index.py"))
@@ -1194,12 +1201,42 @@ def index_mtime():
         return None
 
 
+_TRIM_PENDING = False
+
+
+def _release_freed_arenas():
+    """Hand heap arenas freed by a dropped index back to the OS.
+
+    A reload transiently holds two complete indexes (~30 MB on this vault).
+    glibc keeps the freed arenas on its own free lists rather than returning
+    them, so a daemon that reloads on every auto-learn cycle ratchets its RSS
+    up and never comes back down. malloc_trim() is the only thing that
+    actually releases them. Best effort: a no-op where libc.so.6 is not the
+    malloc in play (macOS, musl), where the ratchet simply remains."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
 def maybe_reload_index(chunks, bm25, meta, loaded_mtime):
     """Hot-reload the index when update_index.py (auto-learn) has replaced
     the pickle since it was loaded. Returns (chunks, bm25, meta, mtime,
     reloaded). Never raises and never kills the caller: any load failure
     keeps the current in-memory index and records the new mtime so a broken
     pickle is not retried on every question."""
+    global _TRIM_PENDING
+    # A previous call swapped in a new index. Every caller rebinds its own
+    # names from our return value, so only now -- one call later -- has the
+    # old index actually lost its last reference and become reclaimable.
+    # Trimming inside the reload itself would run while the caller still
+    # holds it, and free nothing.
+    if _TRIM_PENDING:
+        _TRIM_PENDING = False
+        import gc
+        gc.collect()
+        _release_freed_arenas()
     current = index_mtime()
     if current is None or (loaded_mtime is not None
                            and current <= loaded_mtime):
@@ -1208,6 +1245,7 @@ def maybe_reload_index(chunks, bm25, meta, loaded_mtime):
         new_chunks, new_bm25, new_meta = load_index()
     except (SystemExit, Exception):
         return chunks, bm25, meta, current, False
+    _TRIM_PENDING = True
     return new_chunks, new_bm25, new_meta, current, True
 
 
