@@ -2194,15 +2194,28 @@ def _rank_excerpts_by_relevance(query, candidates):
     """Reorder (url, text) candidates by query<->excerpt cosine using the same
     nomic-embed-text pipeline as _rerank_by_embedding. Returns candidates
     unchanged (DDG order) on any embed failure -- never raises, never blocks.
-    Caller is responsible for slicing to MAX_WEB_FETCH afterward."""
-    if len(candidates) < 2:
+    Caller is responsible for slicing to MAX_WEB_FETCH afterward.
+
+    Shares _RERANK_ENABLED with _rerank_by_embedding: an unreachable embedder
+    is a property of the box, not of the path that noticed it, so either one
+    tripping the switch spares the other a RERANK_TIMEOUT per query. Without
+    this the vault path went quiet after one failure while the web path kept
+    paying the full timeout on every single search.
+
+    It deliberately does NOT share _RERANK_VECS. Vault chunks are a fixed
+    corpus worth memoizing; web excerpts are new URLs on every query, so the
+    same memo here would be an unbounded dict that never hits."""
+    global _RERANK_ENABLED
+    if not _RERANK_ENABLED or len(candidates) < 2:
         return candidates
     try:
         from semantic_cache import _embed, _normalize, _dot
     except Exception:
+        _RERANK_ENABLED = False
         return candidates
     qraw = _embed(query, OLLAMA_HOST, RERANK_EMBED_MODEL, RERANK_TIMEOUT)
     if not qraw:
+        _RERANK_ENABLED = False
         return candidates
     qv = _normalize(qraw)
     scored = []
