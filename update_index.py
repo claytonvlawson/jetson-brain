@@ -9,9 +9,10 @@ searched the web can answer from that knowledge on the very next question
 (brain.py hot-reloads the index when the pickle's mtime changes).
 
 Scope is deliberately narrow: ONLY sources under the MANAGED_DIRS folders
-(_WebCache/ for web fetches, _Research/ for reviewed research-agent notes) are
-added, replaced, or removed. Hand-authored vault notes are never touched here;
-they still flow through the full build_index.py rebuild at deploy time. That
+(_WebCache/ for web fetches, _Research/ for reviewed research-agent notes,
+_Advisor/ for approved advisor exchanges) are added, replaced, or removed.
+Hand-authored vault notes are never touched here; they still flow through the
+full build_index.py rebuild at deploy time. That
 containment is the safety story: automation can only ever touch the
 machine-managed underscore folders, so it cannot corrupt or displace the
 curated vault, and purging a bad note (refresh_web.py --purge, or
@@ -55,12 +56,43 @@ DEFAULT_INDEX = os.path.join(BRAIN_ROOT, "index", "bm25.pkl")
 # The machine-managed vault folders this script owns. Everything else in the
 # vault is hand-authored and out of scope. _WebCache holds web fetches
 # (web_cache.py); _Research holds research-agent notes a human approved
-# (research_review.py).
-MANAGED_DIRS = ("_WebCache", "_Research")
+# (research_review.py); _Advisor holds advisor exchanges a human approved
+# (review_qa.py), and matches the deploy.sh vault-push exclude list.
+MANAGED_DIRS = ("_WebCache", "_Research", "_Advisor")
 WEB_DIR_NAME = MANAGED_DIRS[0]   # kept for older callers/tests
 LOCK_STALE_SECONDS = 600
 
 _MANAGED_PREFIXES = tuple(d + "/" for d in MANAGED_DIRS)
+
+
+class ExitCode(int):
+    """An int exit code that also carries WHY it is that value.
+
+    run() used to return a bare 0 both when it indexed and when it bailed on a
+    held .update-lock, so a reviewer promoting a note while brain-learn.service
+    or a fire-and-forget _spawn_index_update() held the lock saw success on a
+    note that was never indexed. The two outcomes are now distinguishable
+    without breaking a single caller: this IS an int, it compares equal to 0
+    and is falsy exactly as before, sys.exit() still yields the right process
+    status, and only a caller that asks (was_skipped) sees the difference."""
+
+    def __new__(cls, value, skipped=False):
+        self = int.__new__(cls, value)
+        self.skipped = bool(skipped)
+        return self
+
+
+# The sentinel run() returns when another update held the lock: numerically 0
+# (nothing failed, nothing is broken) but flagged so a caller can retry or tell
+# the operator the note is not searchable yet.
+SKIPPED_LOCKED = ExitCode(0, skipped=True)
+
+
+def was_skipped(rc):
+    """True when rc came back from run() as a lock skip rather than real work.
+    Safe on a plain int (an older run() return, or a subprocess returncode),
+    which reads as not-skipped."""
+    return bool(getattr(rc, "skipped", False))
 
 
 def _is_managed_source(source):
@@ -127,7 +159,13 @@ def _chunk_file(path, rel_source, meta_mode="none"):
 def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
         ollama_host=bi.DEFAULT_OLLAMA_HOST):
     """Perform one incremental update. Returns an exit code (0 also for a
-    clean no-op) and never leaves a partial pickle behind."""
+    clean no-op) and never leaves a partial pickle behind.
+
+    A 0 means "the managed notes are in the pickle". The one exception is a
+    held lock, which returns the SKIPPED_LOCKED sentinel: still 0 for every
+    caller that only tests == 0 or truthiness, but was_skipped() is True on it
+    so a caller that cares can retry instead of reporting a promote that never
+    happened."""
     def say(msg):
         if not quiet:
             print(msg)
@@ -138,8 +176,8 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
 
     lock_path = index_path + ".update-lock"
     if not _acquire_lock(lock_path):
-        say("Another update is running; skipping.")
-        return 0
+        say("Another update is running; skipping (nothing was indexed).")
+        return SKIPPED_LOCKED
 
     try:
         try:

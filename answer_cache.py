@@ -394,12 +394,28 @@ class AnswerCache:
 
     def _flush_dirty(self):
         """Persist entries whose hits/last_used were bumped by a cache hit but
-        not yet written. Skips paths no longer present (evicted/cleared) so a
-        flush can never resurrect a deleted file. Never raises."""
+        not yet written.
+
+        Two guards, both needed, neither sufficient alone. self.entries.get
+        skips paths this process dropped itself (evicted or cleared), and
+        os.path.exists skips paths deleted underneath the process by someone
+        else, which is what a refresh_web retire does: without that second
+        guard the next flush rewrites the retired entry's JSON from memory and
+        the purge is silently undone on disk, so even a later restart would
+        reload it. The exists check is a best-effort stat, not a lock: a delete
+        landing between the check and the os.replace still resurrects the file
+        (TOCTOU), so a purge is only fully correct once every long-running
+        reader has been restarted. Never raises."""
         try:
             for path in list(self._dirty):
                 entry = self.entries.get(path)
-                if entry is not None:
+                if entry is None:
+                    continue
+                try:
+                    present = os.path.exists(path)
+                except Exception:
+                    present = True
+                if present:
                     self._write_entry(path, entry)
             self._dirty.clear()
         except Exception:

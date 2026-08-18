@@ -35,6 +35,10 @@ try:
 except Exception:
     persist_web_fetch = None
 try:
+    import web_paths
+except Exception:
+    web_paths = None
+try:
     from brain_ui import UI
 except Exception:
     UI = None
@@ -50,21 +54,45 @@ except Exception:
 # Paths (fixed install layout on the Jetson). BRAIN_INDEX overrides the pickle
 # path so two index variants can be A/B'd side by side without touching the
 # live index (eval runs point BRAIN_INDEX at a candidate build).
-BRAIN_ROOT = "/mnt/nvme/brain"
+# BRAIN_ROOT honours the env var, matching update_index.py:52 and web_paths.py.
+# It used to be a bare literal here while those two read the environment, so an
+# overridden BRAIN_ROOT (tests, a side-by-side eval tree) moved the queue and the
+# web paths but left CACHE_DIR pointing at the production cache. refresh_web's
+# retire then purged a different answer cache than this file writes to and
+# reported success having purged nothing. One source of truth closes that.
+BRAIN_ROOT = os.environ.get("BRAIN_ROOT", "/mnt/nvme/brain")
 INDEX_PATH = os.environ.get("BRAIN_INDEX") or os.path.join(
     BRAIN_ROOT, "index", "bm25.pkl")
-CACHE_DIR = "/mnt/nvme/brain/cache"
+CACHE_DIR = os.path.join(BRAIN_ROOT, "cache")
 VAULT_NAME = "ThesisVault"   # Obsidian vault name for clickable source links
 
 # Web-fetch persistence (web_cache.py). Every DuckDuckGo fetch is saved twice:
 # a raw JSON record under WEB_CACHE_DIR for fast dedup/reuse (keyed by url +
-# content hash), and a human-readable, indexable note under WEB_VAULT_DIR.
-# WEB_VAULT_DIR MUST live under the build_index.py vault root
-# (/mnt/nvme/brain/vault) so the next build_index.py run makes these notes
-# BM25-retrievable. WEB_CACHE_DIR is raw-content caching only and is kept in its
-# own cache/web subdir, separate from the AnswerCache Q/A cache under CACHE_DIR.
-WEB_CACHE_DIR = os.path.join(CACHE_DIR, "web")                  # /mnt/nvme/brain/cache/web
-WEB_VAULT_DIR = os.path.join(BRAIN_ROOT, "vault", "_WebCache")  # under vault, indexable
+# content hash), and a human-readable note under the notes dir.
+#
+# These paths are no longer defined here: web_paths.py is the single source of
+# truth shared with web_cache.py, refresh_web.py and web_review.py, because two
+# independent hardcoded copies of the same _WebCache path is how retire and
+# refresh silently drift onto different directories. The old brain.py names are
+# kept as aliases so nothing downstream has to change (web_paths spells the
+# vault notes dir WEB_NOTES_DIR; brain.py has always called it WEB_VAULT_DIR).
+#
+# WEB_VAULT_DIR lives under the build_index.py vault root and is therefore
+# indexable; WEB_QUEUE_DIR does NOT, and is where unreviewed fetches now land
+# (see _persist_web). WEB_CACHE_DIR is raw-content caching only and is kept in
+# its own cache/web subdir, separate from the AnswerCache Q/A cache under
+# CACHE_DIR. The literals below are a fallback for the case where web_paths is
+# missing; they must stay byte-identical to web_paths' definitions.
+if web_paths is not None:
+    WEB_CACHE_DIR  = web_paths.WEB_CACHE_DIR
+    WEB_VAULT_DIR  = web_paths.WEB_NOTES_DIR
+    WEB_QUEUE_DIR  = web_paths.WEB_QUEUE_DIR
+    STORE_CHAR_CAP = web_paths.STORE_CHAR_CAP
+else:
+    WEB_CACHE_DIR  = os.path.join(CACHE_DIR, "web")
+    WEB_VAULT_DIR  = os.path.join(BRAIN_ROOT, "vault", "_WebCache")
+    WEB_QUEUE_DIR  = os.path.join(BRAIN_ROOT, "queue", "_WebCache")
+    STORE_CHAR_CAP = 10000
 
 DEFAULT_MODEL = "llama3.2:3b"
 OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -337,7 +365,14 @@ RERANK_CHUNK_CHARS = 500     # truncate chunk text before embedding
 RERANK_EMBED_MODEL = "nomic-embed-text"
 RERANK_TIMEOUT = 30
 _RERANK_VECS = {}            # chunk key -> normalized embedding (in-process memo)
-_RERANK_ENABLED = True       # flips False after a hard embed failure this run
+# BRAIN_RERANK=0 turns the embedding rerank off outright. This exists for one
+# reason: BRAIN_HYBRID=0 is NOT a lexical baseline. It falls back to BM25 + this
+# rerank, which re-embeds RERANK_CAND_N candidates per query with a dense model,
+# so an arm labelled "hybrid off" still has an embedder inside it (and runs ~30x
+# slower for it). Without a second gate there is no way to measure what BM25
+# alone actually retrieves, which makes "dense vs BM25" unanswerable. Default
+# stays on: this is a measurement gate, not a feature.
+_RERANK_ENABLED = os.environ.get("BRAIN_RERANK", "1") not in ("0", "false", "False", "no")
 
 # ---- Hybrid dense + BM25 retrieval (Reciprocal Rank Fusion) ----------------
 # When the loaded index carries a dense block (build_index.py --embed), each
@@ -506,13 +541,22 @@ OBSIDIAN_BLOCK_CANDIDATES = max(1, int(
 SKILLS_ENABLED = os.environ.get("BRAIN_SKILLS", "0") not in (
     "0", "false", "False", "no")
 
-# Self-updating knowledge base: after a web fetch is persisted into the vault
-# (_WebCache notes via web_cache.py), spawn update_index.py so the new pages
-# are folded into bm25.pkl within seconds, and hot-reload the index when its
-# mtime changes (see maybe_reload_index). The brain therefore LEARNS what it
-# looked up: the next question can be answered from the vault without touching
-# the web again. BRAIN_AUTOLEARN=0 disables the trigger (notes still
-# accumulate for the next manual build_index.py run).
+# Self-updating knowledge base, now review-gated for web fetches.
+#
+# What this flag still does: when a note is persisted into the VAULT (a
+# reviewer promoting a queued page, or any other write under vault/_WebCache),
+# spawn update_index.py so the new pages are folded into bm25.pkl within
+# seconds, and hot-reload the index when its mtime changes (see
+# maybe_reload_index).
+#
+# What it no longer does: web fetches do NOT auto-learn any more. They are
+# written to WEB_QUEUE_DIR, which is outside the vault root and therefore
+# outside the index, and they stay there until a human promotes them with
+# web_review.py. Unreviewed scrape was competing with peer-reviewed sources for
+# context slots, which is the whole reason for the queue. The current question
+# is still answered from the live excerpts exactly as before; only permanence
+# waits for approval. BRAIN_AUTOLEARN=0 disables the index-update trigger
+# entirely.
 AUTOLEARN_ENABLED = os.environ.get("BRAIN_AUTOLEARN", "1") not in (
     "0", "false", "False", "no")
 
@@ -558,6 +602,10 @@ def _reset_chat_stats():
 MAX_WEB_RESULTS = 5
 MAX_WEB_FETCH = 3
 WEB_FETCH_TIMEOUT = 8
+# Prompt-facing cap: the most fetched page text any single excerpt contributes
+# to a generation prompt. Deliberately unchanged at 2000. The persistence cap
+# is STORE_CHAR_CAP (web_paths), which is larger, so a stored note keeps depth
+# a prompt can never afford. Anything that builds a prompt slices to this.
 PAGE_CHAR_CAP = 2000
 
 # ---- Semantic web-fallback selection ---------------------------------------
@@ -772,6 +820,19 @@ MULTI_MAX_PER_SOURCE = _env_int("BRAIN_MULTI_MAX_PER_SOURCE", 2)
 # them -- keep_k=12 scored identically (36/40, MRR 0.6481) and keep_k=14 starts
 # dropping chunks -- so freeing repeat slots is the only remaining lever.
 DEFAULT_MAX_PER_SOURCE = _env_int("BRAIN_MAX_PER_SOURCE", 0)
+
+# Per-source cap that applies ONLY to machine-fetched web notes, on every
+# persona including the default one. It exists because the two caps above are
+# both inert by default: DEFAULT_MAX_PER_SOURCE is 0, so nothing bounds a
+# single note on a default question. That was safe while fetch_page truncated
+# at 2000 chars (a web note was one or two chunks). Now that a note stores up
+# to STORE_CHAR_CAP, one page is roughly 7-8 chunks at CHUNK_WORDS=220, which
+# is enough to fill an 8192-token window on its own with one scraped page.
+#
+# Hand-authored vault sources are untouched: this caps _WebCache/ sources and
+# nothing else, so a long scholarly note keeps every slot it earns.
+WEB_SOURCE_PREFIXES = ("_WebCache/",)
+WEB_MAX_PER_SOURCE = _env_int("BRAIN_WEB_MAX_PER_SOURCE", 2)
 
 # Boost the reference notes on an ANALYTIC default-persona question. 0.0 keeps
 # the ranker exactly as it is.
@@ -1239,7 +1300,15 @@ def _prep_dense(dense, chunks):
     except Exception:
         return None
 
+    # prefix_version MUST survive into the prepared meta. _dense_scores calls
+    # _query_prefix() on THIS dict, so dropping the key here silently queries a
+    # prefixed index without its query prefix -- no crash, no warning, just
+    # worse retrieval, and eval_retrieval.py reports prefix=None so the arm
+    # looks identical to an unprefixed one. That is the exact failure
+    # build_index.py's "make the artifact describe itself" comment guards
+    # against, defeated one dict literal later.
     out = {"model": model, "dim": dim, "n": n, "rows_idx": rows_idx,
+           "prefix_version": dense.get("prefix_version") or "none",
            "matrix": None, "buf": None}
     try:
         import numpy as np
@@ -1388,6 +1457,31 @@ def _diversify_order(order, chunks, keep_k, max_per_source):
         if len(picked) >= keep_k:
             break
     return picked
+
+
+def _cap_web_sources(order, chunks, max_per_source):
+    """Demote the overflow chunks of any one WEB note to the end of `order`,
+    keeping at most max_per_source of them in their original ranks. Returns a
+    full-length reordering, never a truncation: nothing is dropped, so a
+    question whose only usable material is one fat scraped page still gets it,
+    just after everything else that ranked.
+
+    Unlike _diversify_order this ignores hand-authored sources entirely and
+    runs for every persona, because the default persona has no cap at all
+    (DEFAULT_MAX_PER_SOURCE = 0) and is exactly where a 10k-char web note would
+    otherwise take the whole window."""
+    picked, overflow, counts = [], [], {}
+    for i in order:
+        src = str((chunks[i] or {}).get("source") or "").replace("\\", "/")
+        if not src.startswith(WEB_SOURCE_PREFIXES):
+            picked.append(i)
+            continue
+        if counts.get(src, 0) < max_per_source:
+            counts[src] = counts.get(src, 0) + 1
+            picked.append(i)
+        else:
+            overflow.append(i)
+    return picked + overflow
 
 
 def _rerank_by_embedding(question, chunks, cand_ids, qvec=None, qvec_model=None):
@@ -2011,8 +2105,14 @@ def web_search(query):
 
 
 def fetch_page(url):
-    """Fetch a URL and return cleaned readable text capped at PAGE_CHAR_CAP.
-    Returns '' on any failure."""
+    """Fetch a URL and return cleaned readable text capped at STORE_CHAR_CAP.
+    Returns '' on any failure.
+
+    The cap here is the PERSISTENCE cap, not the prompt cap: a stored note is
+    worth keeping at full depth, while a prompt still only ever sees
+    PAGE_CHAR_CAP. Every prompt-facing caller must therefore slice to
+    PAGE_CHAR_CAP itself, since this function no longer does it for them
+    (gather_web_context and the direct-FETCH branch both do)."""
     try:
         import requests
         from bs4 import BeautifulSoup
@@ -2027,7 +2127,7 @@ def fetch_page(url):
             tag.decompose()
         text = soup.get_text(separator=" ")
         text = re.sub(r"\s+", " ", text).strip()
-        return text[:PAGE_CHAR_CAP]
+        return text[:STORE_CHAR_CAP]
     except Exception:
         return ""
 
@@ -2082,6 +2182,61 @@ def _rank_excerpts_by_relevance(query, candidates):
     return [pair for _, pair in scored]
 
 
+# Set by gather_web_context to whether the last search's pages were written to
+# the review queue, so the caller's progress line can say so without threading
+# a second return value through every call site.
+LAST_WEB_QUEUED = False
+
+
+def _persist_web(query, pairs, statuses=None, notes_dir=None):
+    """Persist a batch of (url, full_text) pairs fetched for `query`.
+
+    The single persistence path for every web fetch in this file: the SEARCH
+    path (gather_web_context) and the direct-FETCH branch both come here, so a
+    fetch cannot land in one and be dropped by the other. Notes go to
+    WEB_QUEUE_DIR by default, which is outside the vault root and therefore
+    outside the index, so the page waits for web_review.py instead of joining
+    the retrieval pool unreviewed.
+
+    `statuses` is an optional {url: 'snippet'} side dict marking notes whose
+    body is a DuckDuckGo blurb rather than real page text, so review can reject
+    thin notes on sight. It is a SIDE dict on purpose: excerpts are unpacked as
+    'for u, t in excerpts' in several places, so a third tuple element would
+    crash them. Passed through only if web_cache accepts it.
+
+    Best-effort and strictly additive: a no-op when nothing was fetched or the
+    module is unavailable, and any failure is swallowed so answering the user's
+    question is never affected. These are a handful of small atomic disk writes
+    on the answer path (a few ms on NVMe); trivial next to the network fetches,
+    but not literally free.
+
+    Returns True when the write was attempted and did not blow up, so a caller
+    can honestly tell the user the fetch was queued."""
+    if not pairs or persist_web_fetch is None:
+        return False
+    target = notes_dir or WEB_QUEUE_DIR
+    try:
+        if statuses:
+            try:
+                persist_web_fetch(query, pairs, WEB_CACHE_DIR, target,
+                                  statuses=statuses)
+            except TypeError:
+                # Older web_cache without the statuses parameter: the notes are
+                # still worth writing, they just carry no snippet marker.
+                persist_web_fetch(query, pairs, WEB_CACHE_DIR, target)
+        else:
+            persist_web_fetch(query, pairs, WEB_CACHE_DIR, target)
+        # Learn what we just looked up, but ONLY when the note actually landed
+        # somewhere the indexer looks. A queued note is not under the vault
+        # root, so spawning update_index.py for it would pay for a subprocess
+        # and contend for the .update-lock to index nothing.
+        if target == WEB_VAULT_DIR:
+            _spawn_index_update()
+        return True
+    except Exception:
+        return False
+
+
 def gather_web_context(query):
     """Search, fetch hrefs, and return a list of (url, excerpt) capped at
     MAX_WEB_FETCH.
@@ -2094,6 +2249,7 @@ def gather_web_context(query):
     results = web_search(query)
     fetch_cap = MAX_WEB_RESULTS if WEB_SEMANTIC_ENABLED else MAX_WEB_FETCH
     candidates = []
+    statuses = {}
     for r in results:
         if len(candidates) >= fetch_cap:
             break
@@ -2103,28 +2259,25 @@ def gather_web_context(query):
         text = fetch_page(href)
         if not text:
             # Fall back to the search snippet so the model still has something.
+            # Mark it, so review can tell a real page from a two-line blurb.
             text = (r.get("body") or "").strip()
+            if text:
+                statuses[href] = "snippet"
         if text:
             candidates.append((href, text))
     if WEB_SEMANTIC_ENABLED:
         candidates = _rank_excerpts_by_relevance(query, candidates)
-    excerpts = candidates[:MAX_WEB_FETCH]
-    # Persist every DuckDuckGo fetch into the brain: a raw JSON record for
-    # dedup/reuse plus an indexable vault note for the next build_index.py run.
-    # Best-effort and strictly additive: a no-op when nothing was fetched or the
-    # module is unavailable, and any failure is swallowed so answering the
-    # user's question is never affected. These are a handful of small atomic
-    # disk writes on the answer path (a few ms on NVMe); trivial next to the
-    # network fetches above, but not literally free.
-    if excerpts and persist_web_fetch is not None:
-        try:
-            persist_web_fetch(query, excerpts, WEB_CACHE_DIR, WEB_VAULT_DIR)
-            # Learn what we just looked up: fold the new notes into the index
-            # in the background so the next question retrieves them locally.
-            _spawn_index_update()
-        except Exception:
-            pass
-    return excerpts
+    kept = candidates[:MAX_WEB_FETCH]
+    # Persist the FULL fetched text (up to STORE_CHAR_CAP), then return the
+    # prompt-capped view. The two caps are decoupled here and nowhere else: a
+    # stored note keeps the depth a reviewer and a later retrieval want, while
+    # every existing consumer of this function's return value stays capped at
+    # PAGE_CHAR_CAP without being touched.
+    kept_urls = set(u for u, _t in kept)
+    global LAST_WEB_QUEUED
+    LAST_WEB_QUEUED = _persist_web(query, kept, statuses=dict(
+        (u, s) for u, s in statuses.items() if u in kept_urls))
+    return [(u, t[:PAGE_CHAR_CAP]) for u, t in kept]
 
 
 # ---------------------------------------------------------------------------
@@ -3149,6 +3302,11 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                                          qvec_model=qvec_model)
             order_full = order
             tm["rerank"] = time.perf_counter() - _t
+        if order and WEB_MAX_PER_SOURCE > 0:
+            # Bound scraped pages before any persona cap runs. order_full is
+            # deliberately left pointing at the pre-cap ranking so retrieval
+            # measurement still sees where a chunk actually ranked.
+            order = _cap_web_sources(order, chunks, WEB_MAX_PER_SOURCE)
         if order and (persona in ("parent", "scholar") or intent == "multi"
                       or DEFAULT_MAX_PER_SOURCE > 0):
             # A multi-entity question needs facts from several different notes,
@@ -3618,11 +3776,23 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
             tm["web"] = tm.get("web", 0.0) + (time.perf_counter() - _t)
             if text:
                 run.done("web", "fetched " + url)
+                # Persist BEFORE generating. This branch used to answer and
+                # return without writing anything, so a direct FETCH taught the
+                # brain nothing at all. It has to happen here rather than in
+                # _finish: _finish is not the only way out of this function
+                # (the answer-cache hit and the semantic-router hit both return
+                # earlier), so persistence hung off it would run only sometimes.
+                if _persist_web(question, [(url, text)]):
+                    run.done("web", "fetched " + url
+                             + " · queued for review")
                 doc_messages = [{"role": "system", "content": DOC_SYSTEM}]
                 doc_messages.extend(history)
                 doc_messages.append(
                     {"role": "user", "content": (
-                        "Reference page (" + url + "):\n" + text
+                        # Prompt-only consumer: fetch_page now returns up to
+                        # STORE_CHAR_CAP, so cap explicitly or a 10k page walks
+                        # straight into num_ctx.
+                        "Reference page (" + url + "):\n" + text[:PAGE_CHAR_CAP]
                         + "\n\nQuestion: " + question)}
                 )
                 answer = chat_stream(model, doc_messages, sink=run.begin_answer())
@@ -3633,7 +3803,9 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
         excerpts = gather_web_context(question)
         tm["web"] = tm.get("web", 0.0) + (time.perf_counter() - _t)
         if excerpts:
-            run.done("web", "DuckDuckGo · %d results" % len(excerpts))
+            run.done("web", "DuckDuckGo · %d results%s"
+                     % (len(excerpts),
+                        " · queued for review" if LAST_WEB_QUEUED else ""))
             return _answer_from_excerpts(model, question, excerpts,
                                          history, run)
         run.skip("web", "no usable web results")
@@ -3651,7 +3823,9 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
         run.skip("web", "no usable web results")
         return _answer_no_web(model, question, context_chunks, linked_ids,
                               history, run)
-    run.done("web", "DuckDuckGo · %d results" % len(excerpts))
+    run.done("web", "DuckDuckGo · %d results%s"
+                     % (len(excerpts),
+                        " · queued for review" if LAST_WEB_QUEUED else ""))
     return _answer_from_excerpts(model, question, excerpts, history, run)
 
 
@@ -3959,14 +4133,15 @@ def main():
         if not question:
             continue
 
-        # Auto-learn hot-reload: when a background update_index.py has folded
-        # freshly fetched web pages into the pickle, swap the new index in
-        # before answering so the brain already knows what it just looked up.
+        # Hot-reload: when the pickle has changed on disk (a promoted web note,
+        # a rebuild, a research-agent run), swap the new index in before
+        # answering. The banner no longer claims "web knowledge folded in":
+        # web fetches now go to the review queue, so a reload here is not
+        # evidence that anything web-sourced was learned.
         chunks, bm25, meta, index_mtime_loaded, _reloaded = \
             maybe_reload_index(chunks, bm25, meta, index_mtime_loaded)
         if _reloaded:
-            note = ("[index reloaded: %d chunks, web knowledge folded in]"
-                    % len(chunks))
+            note = "[index reloaded: %d chunks]" % len(chunks)
             if ui is not None:
                 ui.note(note)
             else:

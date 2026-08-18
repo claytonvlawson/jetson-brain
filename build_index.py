@@ -820,12 +820,49 @@ def extract_urls(text):
 _JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv", "Templates", "_Fulltext"}
 
 
+def existing_dense_model(out):
+    """Return the dense model name recorded in an ALREADY EXISTING index at
+    `out`, or None when there is no index, no dense block, or the file cannot
+    be read. Never raises: a pickle we cannot understand is treated as having
+    no dense block, so the guard below can only ever be advisory, never a hard
+    stop on an unrelated read error."""
+    try:
+        if not os.path.isfile(out):
+            return None
+        with open(out, "rb") as fh:
+            data = pickle.load(fh)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    dense = data.get("dense")
+    if not isinstance(dense, dict) or not dense.get("ids"):
+        return None
+    return str(dense.get("model") or "unknown")
+
+
 def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
           ollama_host=DEFAULT_OLLAMA_HOST, meta="inline",
-          embed_prefix=DEFAULT_EMBED_PREFIX):
+          embed_prefix=DEFAULT_EMBED_PREFIX, no_embed=False):
     if not os.path.isdir(vault):
         print("ERROR: vault directory not found: %s" % vault)
         return 1
+
+    # A plain re-run (no --embed) overwrites the pickle with a BM25-only index,
+    # silently destroying the dense block the whole hybrid retrieval path
+    # depends on. Every call site that forgets the flag, and every doc that
+    # teaches the bare command, wipes the vectors. Refuse here, at the source,
+    # rather than patching callers one at a time. Checked BEFORE the walk so a
+    # mistake costs a second, not a full rebuild.
+    if not embed and not no_embed:
+        prior_model = existing_dense_model(out)
+        if prior_model:
+            print("REFUSING: %s already carries a dense block (model=%s) and this\n"
+                  "run would overwrite it with a BM25-only index, breaking hybrid\n"
+                  "retrieval until the next embedded build." % (out, prior_model))
+            print("  Keep the vectors:   python3 build_index.py --embed")
+            print("  Drop them on purpose: python3 build_index.py --no-embed")
+            return 2
 
     md_files = []
     pruned = 0
@@ -983,6 +1020,32 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
     if dense is not None:
         index["dense"] = dense
 
+    # Outcome-based guard, the real defense. The early flag check above only
+    # catches a *missing* --embed; it is skipped entirely when --embed was
+    # passed, and build_dense() returns None on failure (Ollama down, embed
+    # model unpulled, over half the chunks failing). Without this check the
+    # pickle would still be written, minus its dense block, and the run would
+    # end at "DONE" with rc 0: 'build_index.py --embed', the exact command
+    # deploy.sh runs, would silently wipe the vectors. Gate on the OUTCOME
+    # instead: if the target already carries a dense block and the index we
+    # are about to write does not, refuse and leave the old pickle intact.
+    # --no-embed stays the explicit, honest way to drop vectors on purpose,
+    # and a first-ever build (no pickle) or a pickle that never had a dense
+    # block is never blocked, since existing_dense_model() returns None.
+    if "dense" not in index and not no_embed:
+        prior_model = existing_dense_model(out)
+        if prior_model:
+            print("REFUSING: %s already carries a dense block (model=%s) but this\n"
+                  "run produced NO usable vectors, so writing it would wipe them and\n"
+                  "break hybrid retrieval. The existing index is left untouched."
+                  % (out, prior_model))
+            print("  Likely cause: Ollama is not running, or the embed model "
+                  "'%s' is not pulled" % embed_model)
+            print("                (check: curl -s %s/api/tags)" % ollama_host.rstrip("/"))
+            print("  Retry once it is up:  python3 build_index.py --embed")
+            print("  Drop them on purpose: python3 build_index.py --no-embed")
+            return 3
+
     out_dir = os.path.dirname(out)
     if out_dir and not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
@@ -1033,6 +1096,10 @@ def main():
     parser.add_argument("--embed", action="store_true",
                         help="Also embed every chunk (needs Ollama running) and "
                              "store a dense block for brain.py hybrid retrieval.")
+    parser.add_argument("--no-embed", action="store_true",
+                        help="Explicitly build a BM25-only index, discarding any "
+                             "dense block the existing pickle carries. Without "
+                             "this flag such an overwrite is refused.")
     parser.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL,
                         help="Ollama embedding model for --embed (default %(default)s). "
                              "Must match brain.py's index dense model.")
@@ -1054,7 +1121,8 @@ def main():
     args = parser.parse_args()
     return build(args.vault, args.out, embed=args.embed,
                  embed_model=args.embed_model, ollama_host=args.ollama_host,
-                 meta=args.meta, embed_prefix=args.embed_prefix)
+                 meta=args.meta, embed_prefix=args.embed_prefix,
+                 no_embed=args.no_embed)
 
 
 if __name__ == "__main__":

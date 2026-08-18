@@ -16,8 +16,10 @@ Flow per exchange:
     quit     -> stop; approvals so far are kept
 
 Handled ids are recorded in reviewed.jsonl so nothing you already judged comes
-back. After a session with approvals it offers to re-run build_index.py so the
-new notes become retrievable.
+back. After a session with approvals it offers to fold them in with
+update_index.run(), the incremental path research_review.py also uses: it
+touches only the machine-managed folders (_Advisor among them) and, unlike a
+bare build_index.py run, cannot drop the index's dense block.
 
     python3 review_qa.py            # review everything not yet handled
     python3 review_qa.py --limit 10 # review at most 10 this session
@@ -29,7 +31,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 
@@ -38,7 +39,6 @@ try:
 except Exception:
     brain_input = None
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.environ.get("ADVISOR_LOG_DIR", "/mnt/nvme/brain/advisor")
 VAULT_DIR = os.environ.get("BRAIN_VAULT", "/mnt/nvme/brain/vault")
 QA_LOG = os.path.join(LOG_DIR, "qa_log.jsonl")
@@ -156,6 +156,33 @@ def write_note(exchange, answer_text):
     return path
 
 
+def _reindex():
+    """Fold the approved _Advisor notes into bm25.pkl, mirroring
+    research_review._reindex(). update_index only rewrites the machine-managed
+    folders and keeps the pickle's dense block, where a bare build_index.py run
+    rebuilds the whole vault BM25-only and destroys the vectors."""
+    try:
+        import update_index
+    except Exception as exc:
+        print("[review] could not import update_index (%r); run "
+              "update_index.py manually" % exc)
+        return 1
+    try:
+        rc = update_index.run(vault=VAULT_DIR, quiet=False)
+    except Exception as exc:
+        print("[review] reindex failed (%r); run update_index.py manually" % exc)
+        return 1
+    # A held .update-lock returns 0 as well, so ask instead of assuming: the
+    # notes are on disk but NOT searchable until an update actually runs.
+    if update_index.was_skipped(rc):
+        print("[review] another index update held the lock, so these notes are "
+              "NOT searchable yet. Re-run:  python3 update_index.py")
+        return rc
+    if rc == 0:
+        print("[review] indexed. The running brain hot-reloads on its next turn.")
+    return rc
+
+
 def show(exchange, feedback_by_id, idx, total):
     fbs = feedback_by_id.get(exchange["id"], [])
     ups = sum(1 for f in fbs if f.get("vote") == "up")
@@ -242,13 +269,9 @@ def main():
             print("  " + p)
         ans = input("\nRe-index the vault now so these become searchable? [y/N] ").strip().lower()
         if ans == "y":
-            script = os.path.join(HERE, "build_index.py")
-            print("Running build_index.py ...")
-            rc = subprocess.run([sys.executable, script], cwd=HERE).returncode
-            print("build_index.py exited with %d" % rc)
-            return rc
+            return _reindex()
         else:
-            print("Skipped re-index. Run it later with:  python3 build_index.py")
+            print("Skipped re-index. Run it later with:  python3 update_index.py")
     return 0
 
 

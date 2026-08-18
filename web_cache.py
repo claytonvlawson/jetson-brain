@@ -5,9 +5,13 @@ Every excerpt the brain fetches from the web is written to disk TWICE:
 
   (1) a machine-readable JSON cache file under WEB_CACHE_DIR, keyed by
       URL + content hash, for fast dedup and reuse; and
-  (2) a human-readable, BM25-indexable vault note under WEB_NOTES_DIR (which
-      lives UNDER the build_index.py vault root) so the next build_index.py run
-      folds the fetched page into the searchable index.
+  (2) a human-readable Obsidian note, written by default into the REVIEW QUEUE
+      (WEB_QUEUE_DIR, outside the vault and therefore not indexed) and only
+      into WEB_NOTES_DIR (under the build_index.py vault root, where the next
+      build_index.py run folds it into the searchable index) when the caller
+      asks for that directory explicitly. A url on the web_paths denylist is
+      skipped entirely: neither file is written, which is what makes a reviewer's
+      'reject' durable against the next fetch of the same page.
 
 This mirrors answer_cache.py's idioms: standard-library only, a strict
 never-raise-into-caller contract, atomic temp-file + os.replace writes,
@@ -40,17 +44,20 @@ import datetime
 from urllib.parse import urlparse
 
 
-# -- Paths (mirror brain.py's install layout; this module never imports brain) -
-# Callers pass their own dirs in, but these defaults match brain.py so the
-# module is usable standalone. WEB_NOTES_DIR MUST live under VAULT_ROOT so
-# build_index.py's os.walk discovers the notes; the leading-underscore folder
-# name reads as an obviously machine-managed directory and sorts to the top.
-BRAIN_ROOT    = "/mnt/nvme/brain"
-WEB_CACHE_DIR = os.path.join(BRAIN_ROOT, "cache", "web")   # (1) raw JSON entries
-VAULT_ROOT    = os.path.join(BRAIN_ROOT, "vault")          # == build_index DEFAULT_VAULT
-WEB_NOTES_DIR = os.path.join(VAULT_ROOT, "_WebCache")      # (2) indexable .md notes
+# -- Paths (owned by web_paths.py; this module never imports brain) -----------
+# These names are IMPORTED, not redefined. A second definition of _WebCache is
+# exactly how a retire deletes out of one directory while a refresh rewrites
+# into another, so web_paths.py is the single source of truth and every name
+# below is re-exported here only so existing importers (refresh_web.py,
+# brain.py, research_note.py, the tests) keep working unchanged.
+#
+# WEB_NOTES_DIR lives under VAULT_ROOT and is therefore INDEXED: it holds notes
+# a human approved. WEB_QUEUE_DIR lives outside the vault and is not indexed at
+# all: it is where a fresh fetch lands, awaiting review. Writing to the queue is
+# the default; promotion into the vault is a deliberate move by web_review.py.
+from web_paths import (BRAIN_ROOT, VAULT_ROOT, WEB_CACHE_DIR, WEB_NOTES_DIR,
+                       WEB_QUEUE_DIR, NOTE_TEXT_CAP, is_denied)
 
-NOTE_TEXT_CAP   = 8000   # hard cap on the note body's fetched-text length
 SLUG_MAX_LEN    = 48     # match answer_cache slug cap
 HASH_PREFIX_LEN = 12     # sha1(url) prefix used in filenames + entry key
 MAX_WEB_NOTES   = 2000   # cap on stored pairs; oldest are pruned past this
@@ -214,17 +221,25 @@ def _yaml_quote(s: str) -> str:
 
 # -- note + entry templating --------------------------------------------------
 def _render_note(query: str, url: str, final_url: str, title: str,
-                 fetched_iso: str, body_text: str) -> str:
-    """Build the vault .md note. Leading YAML frontmatter (provenance only,
-    stripped before indexing) then a body that RESTATES the retrieval-load-
-    bearing fields (title H1, source markdown link, the query, a #web-cache
-    hashtag, wikilinks) so BM25 can actually find the page. Never raises."""
+                 fetched_iso: str, body_text: str, status: str = "") -> str:
+    """Build the .md note. Leading YAML frontmatter (provenance only, stripped
+    before indexing) then a body that RESTATES the retrieval-load-bearing fields
+    (title H1, source markdown link, the query, a #web-cache hashtag, wikilinks)
+    so BM25 can actually find the page.
+
+    status is the fetch quality marker, 'snippet' when the text is only the
+    DuckDuckGo blurb rather than a real page fetch. It is written to the
+    frontmatter for the reviewer AND restated in the body, because build_index
+    strips frontmatter before tokenizing: a body line is the only version a
+    search for thin notes can ever find. Never raises."""
     fm_title = _sanitize_frontmatter_value(_no_dashes(title))
     fm_query = _sanitize_frontmatter_value(_no_dashes(query))
     fm_url = _sanitize_frontmatter_value(url)
     fm_final = _sanitize_frontmatter_value(final_url)
     host = _host(url)
     heading = fm_title or host
+    fm_status = _sanitize_frontmatter_value(_no_dashes(status)) or "full"
+    status_tag = "web-snippet" if fm_status == "snippet" else "web-full"
 
     frontmatter = "\n".join([
         "---",
@@ -233,7 +248,8 @@ def _render_note(query: str, url: str, final_url: str, title: str,
         "final_url: %s" % _yaml_quote(fm_final),
         "query: %s" % _yaml_quote(fm_query),
         "fetched_at: %s" % _yaml_quote(fetched_iso),
-        "tags: [web, web-cache]",
+        "status: %s" % _yaml_quote(fm_status),
+        "tags: [web, web-cache, %s]" % status_tag,
         "generator: %s" % _yaml_quote("web_cache.py"),
         "aliases: [%s]" % _yaml_quote(fm_url),
         "---",
@@ -251,7 +267,8 @@ def _render_note(query: str, url: str, final_url: str, title: str,
         "Source: [%s](%s)" % (host, fm_url),
         "Queries: %s" % fm_query,
         "Fetched: %s" % _now_human(),
-        "Tags: #web-cache",
+        "Status: %s" % fm_status,
+        "Tags: #web-cache #%s" % status_tag,
         "Related: [[%s]] [[%s]]" % (_WIKILINK_MOC, _WIKILINK_VAULT),
         "",
         "## Fetched content",
@@ -271,7 +288,11 @@ class WebCache:
     Layout:
         cache_dir/<stem>.json   raw JSON record (dedup/reuse)
         notes_dir/<stem>.md     indexable vault note (retrievability)
-    where <stem> = '<host>-<sha1(url)[:12]>' pairs the two files. The stem is
+    where <stem> = '<host>-<sha1(url)[:12]>' pairs the two files, and notes_dir
+    defaults to the unindexed REVIEW QUEUE, never the vault. A caller that
+    really wants to write straight into the indexed vault (refresh_web.py
+    refreshing an already-approved note in place) has to name that directory.
+    The stem is
     URL-addressed, so one url owns one pair for its lifetime: re-fetching the
     same url with changed content updates that pair in place rather than piling
     up stale copies. The store is bounded at MAX_WEB_NOTES pairs; oldest pairs
@@ -279,7 +300,7 @@ class WebCache:
     """
 
     def __init__(self, cache_dir: str = WEB_CACHE_DIR,
-                 notes_dir: str = WEB_NOTES_DIR) -> None:
+                 notes_dir: str = WEB_QUEUE_DIR) -> None:
         self.cache_dir = cache_dir
         self.notes_dir = notes_dir
         # A dir that cannot be created leaves that half disabled but never
@@ -309,16 +330,27 @@ class WebCache:
         except Exception:
             return False
 
-    def store_result(self, query: str, url: str, text: str) -> dict:
-        """Persist ONE excerpt as the paired JSON entry + vault note. URL-
-        addressed and idempotent: one url owns one pair, so a re-fetch with the
-        SAME content is a no-op (short-circuit below) and a re-fetch with CHANGED
-        content overwrites the pair in place (os.replace). Returns a result dict
-        describing what was written; never raises."""
+    def store_result(self, query: str, url: str, text: str,
+                     status: str = "") -> dict:
+        """Persist ONE excerpt as the paired JSON entry + note. URL-addressed
+        and idempotent: one url owns one pair, so a re-fetch with the SAME
+        content is a no-op (short-circuit below) and a re-fetch with CHANGED
+        content overwrites the pair in place (os.replace). status is the fetch
+        quality marker ('snippet' for a DuckDuckGo blurb, '' for a real fetch).
+        Returns a result dict describing what was written; never raises."""
         try:
             # 1. Guard inputs. Empty/whitespace text or url writes nothing.
             if not (url and text and str(text).strip()):
                 return {}
+
+            # 1a. The denylist gate, consulted BEFORE anything touches disk.
+            #     A rejected url writes NEITHER file, so a reviewer's reject
+            #     survives the next fetch of the same page instead of being
+            #     silently re-learned. Reported, not swallowed, so a caller can
+            #     tell "denied" apart from "failed".
+            if is_denied(url):
+                return {"stem": _deterministic_stem(url), "denied": True,
+                        "json_path": "", "md_path": "", "skipped": True}
 
             # No caller supplies a title today; the note derives its heading from
             # the page host. Kept as an explicit field for the JSON schema.
@@ -345,7 +377,7 @@ class WebCache:
             # 4a. Write the vault note (atomic). Best-effort; a note failure must
             #     not stop the JSON record from being written.
             note = _render_note(query, url, url, title_text,
-                                fetched_iso, body_text)
+                                fetched_iso, body_text, status)
             md_ok = _atomic_write_text(md_path, note)
 
             # 4b. Write the JSON entry (atomic). Carries md_path as a cross-link.
@@ -357,6 +389,7 @@ class WebCache:
                 "title": title_text,
                 "sha1": content_sha1,
                 "fetched_at": fetched_iso,
+                "status": str(status or ""),
                 "char_len": len(text),
                 "text": text,
                 "md_path": md_path,
@@ -413,11 +446,17 @@ class WebCache:
         except Exception:
             return
 
-    def store_many(self, query: str, excerpts) -> list:
+    def store_many(self, query: str, excerpts, statuses=None) -> list:
         """Persist a batch of (url, text) tuples. Malformed items (not a 2-tuple,
         None/empty url or text) are skipped individually so one bad excerpt never
         aborts the rest. Returns a per-item list of result dicts ({} for skipped
-        items). Never raises."""
+        items).
+
+        statuses is an OPTIONAL side dict {url: 'snippet'}. It is a side dict and
+        not a third tuple element on purpose: excerpts are unpacked as
+        'for u, t in excerpts' in brain_skills.py and in _answer_from_excerpts,
+        so widening the tuple would break every existing consumer. Never
+        raises."""
         results = []
         try:
             if not excerpts:
@@ -434,7 +473,14 @@ class WebCache:
                         results.append({})
                         continue
                     url, text = seq[0], seq[1]
-                    results.append(self.store_result(query, url, text))
+                    status = ""
+                    try:
+                        if statuses:
+                            status = statuses.get(url) or ""
+                    except Exception:
+                        status = ""
+                    results.append(
+                        self.store_result(query, url, text, status))
                 except Exception:
                     results.append({})
             return results
@@ -444,17 +490,22 @@ class WebCache:
 
 def persist_web_context(query, excerpts,
                         cache_dir: str = WEB_CACHE_DIR,
-                        notes_dir: str = WEB_NOTES_DIR) -> None:
+                        notes_dir: str = WEB_QUEUE_DIR,
+                        statuses=None) -> None:
     """One-call hook for brain.gather_web_context. Constructs a WebCache and
     stores every (url, text) excerpt as a JSON + note pair. Swallows EVERYTHING
     (returns None) so the brain keeps working if the disk is full, read-only, or
-    the vault dir is missing. `excerpts` is exactly the list of (url, text)
-    tuples gather_web_context already builds.
+    the target dir is missing. `excerpts` is exactly the list of (url, text)
+    tuples gather_web_context already builds; `statuses` is the optional
+    {url: 'snippet'} side dict described on store_many.
 
-    cache_dir / notes_dir are overridable so this can be exercised against a
-    temp directory in tests without writing into the Jetson's /mnt tree."""
+    notes_dir is EXPLICIT and defaults to the review queue: the caller decides
+    queue versus vault, and a caller that decides nothing gets containment
+    rather than an unreviewed write into the indexed vault. cache_dir /
+    notes_dir are also how a test points this at a temp directory instead of the
+    Jetson's /mnt tree."""
     try:
-        WebCache(cache_dir, notes_dir).store_many(query, excerpts)
+        WebCache(cache_dir, notes_dir).store_many(query, excerpts, statuses)
     except Exception:
         return
 

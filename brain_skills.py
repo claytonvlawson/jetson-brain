@@ -56,6 +56,12 @@ import re
 import time
 from dataclasses import dataclass, field
 
+# The one non-stdlib import this module allows itself: web_paths is stdlib-only,
+# imports nothing from brain.py, and is the single source of truth for the web
+# cache/queue directories and the two character caps. Redefining any of it here
+# is exactly the drift the queue design is meant to end.
+import web_paths
+
 # ---- Enable flag + budgets -------------------------------------------------
 
 
@@ -724,6 +730,34 @@ def _do_web_search(ctx, question, arg):
     return (text, [u for u, _ in excerpts], "web_search"), None
 
 
+def _persist_fetched_page(query, url, text):
+    """Queue a directly fetched page the same way brain.gather_web_context
+    queues a search result, so the fetch_url skill stops being a hole in the
+    web-to-vault loop (it used to answer from a page and persist nothing).
+
+    Writes to WEB_QUEUE_DIR, never to the vault: a direct fetch is a candidate,
+    and promotion into vault/_WebCache is a reviewer's decision. web_cache is
+    imported lazily so this module still imports with no web_cache present, and
+    every failure is swallowed, matching web_cache's never-raise-into-caller
+    contract. Returns True when the write was attempted."""
+    if not url or not text:
+        return False
+    try:
+        if web_paths.is_denied(url):
+            _log("fetch_url %s: denylisted, not queued" % url)
+            return False
+        web_paths.ensure_dirs()
+        import web_cache
+        web_cache.persist_web_context(
+            query, [(url, text)],
+            cache_dir=web_paths.WEB_CACHE_DIR,
+            notes_dir=web_paths.WEB_QUEUE_DIR)
+        return True
+    except Exception as exc:
+        _log("fetch_url %s: queue write failed (%s)" % (url, exc))
+        return False
+
+
 def _do_fetch_url(ctx, question, arg):
     if ctx.fetch_page is None:
         return None, "fetch_url: web access is not available"
@@ -736,7 +770,13 @@ def _do_fetch_url(ctx, question, arg):
         return None, "fetch_url %s: failed (%s)" % (url, exc)
     if not page:
         return None, "fetch_url %s: page was empty or unreachable" % url
-    user = ("Reference page (" + url + "):\n" + page
+    # Persist the FULL page (up to web_cache's note cap) before answering, so a
+    # page that the model then fails to use is still queued for review.
+    _persist_fetched_page(question, url, page)
+    # Prompt-facing text is capped explicitly: fetch_page now returns
+    # STORE_CHAR_CAP characters, so this call site no longer inherits the old
+    # implicit 2000-char protection.
+    user = ("Reference page (" + url + "):\n" + page[:web_paths.PAGE_CHAR_CAP]
             + "\n\nQuestion: " + question)
     text = _answer_call(ctx, ctx.doc_system or FALLBACK_DOC_SYSTEM, user)
     if not text:
