@@ -255,11 +255,20 @@ def build_citations(sources):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def _send(self, code, payload):
+    def _send(self, code, payload, close=False):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if close:
+            # Set close on any reply sent BEFORE the request body was read.
+            # protocol_version is HTTP/1.1, so the socket would otherwise stay
+            # keep-alive with an undrained body still in it, and
+            # handle_one_request would parse that JSON as the next request
+            # line, poisoning the NEXT legitimate request on the same pooled
+            # connection. send_header() also flips self.close_connection, so
+            # this is the whole fix. Same reasoning as the shim's _send_raw.
+            self.send_header("Connection", "close")
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -282,7 +291,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             length = 0
         if length <= 0 or length > max_len:
-            self._send(400, {"error": "bad request"})
+            # Answered without reading the body, so this reply must close.
+            self._send(400, {"error": "bad request"}, close=True)
             return None
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))
