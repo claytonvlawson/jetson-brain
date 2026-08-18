@@ -17,6 +17,11 @@ vault/
 answer_cache/
 *.log
 obsidian_vectors.json
+# Mac-side index. Named without a trailing slash on purpose: a linked git
+# worktree symlinks this rather than copying 6.6M of build artifact, and a
+# 'index-mac/' pattern would not match a symlink. Until now it stayed quiet
+# only because its sole content (bm25.pkl) matches *.pkl above.
+index-mac
 
 # Secrets / env
 .env
