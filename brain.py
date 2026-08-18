@@ -1800,6 +1800,7 @@ def _post_filter_rows(cand_rows, rows_idx, chunks, predicate):
 _QUERY_PREFIXES = {
     "none": "",
     "nomic-v1": "search_query: ",
+    "jina-v5": "Query: ",
 }
 
 

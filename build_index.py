@@ -87,6 +87,11 @@ EMBED_TIMEOUT = 60        # generous: a cold model load on the Jetson is slow
 EMBED_PREFIXES = {
     "none": ("", ""),
     "nomic-v1": ("search_document: ", "search_query: "),
+    # jina-embeddings-v5 ships its scheme in config_sentence_transformers.json
+    # as prompts {"query": "Query: ", "document": "Document: "}. Unlike nomic's
+    # search_*: pair these are plain English words, and unlike qwen3-embedding
+    # the instruction goes on BOTH sides, not the query only.
+    "jina-v5": ("Document: ", "Query: "),
 }
 DEFAULT_EMBED_PREFIX = "none"
 
