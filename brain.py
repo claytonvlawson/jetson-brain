@@ -42,6 +42,10 @@ try:
     import brain_input
 except Exception:
     brain_input = None
+try:
+    import brain_transcript
+except Exception:
+    brain_transcript = None
 
 # Paths (fixed install layout on the Jetson). BRAIN_INDEX overrides the pickle
 # path so two index variants can be A/B'd side by side without touching the
@@ -2716,6 +2720,20 @@ def _short_srcs(sources, n=3):
     return ", ".join(names) + tail
 
 
+def _log_turn(question, answer, sources):
+    """Append one answered turn to the persistent transcript, if armed.
+
+    A no-op unless the REPL called brain_transcript.enable(), which is what
+    keeps the :8899 web server and the :8000 advisor -- both of which reach
+    _finish through handle_question -- from writing into the REPL's history."""
+    if brain_transcript is None:
+        return
+    try:
+        brain_transcript.append(question, answer, sources)
+    except Exception:
+        pass
+
+
 def _finish(run, history, question, answer, sources, history_text=None):
     """Common tail: append to history, print the sources branch, return.
 
@@ -2731,6 +2749,11 @@ def _finish(run, history, question, answer, sources, history_text=None):
     history.append({"role": "assistant",
                     "content": answer if history_text is None else history_text})
     trim_history(history)
+    # The transcript stores the DISPLAYED answer, never history_text. The two
+    # diverge on purpose: history_text is the shrunken version kept for the next
+    # prompt's context budget, while /history is read by a human who wants back
+    # exactly what was on screen.
+    _log_turn(question, answer, sources)
     run.sources(sources, vault_name=VAULT_NAME)
     return answer, sources
 
@@ -3646,7 +3669,11 @@ HELP_TEXT = """Commands:
   /cache         show the knowledge-bank stats (entries, reuses, balance, size)
   /cache clear   delete all cached answers
   /cache on|off  enable / disable the answer cache
-  /clear         forget the conversation history
+  /clear         forget the conversation context (the transcript is kept)
+  /history [n]   scroll back through past Q&A, including previous runs
+  /history all   show the whole saved transcript
+  /history <t>   show only saved turns matching the text <t>
+  /history clear delete the saved transcript
   /help          show this help
   /exit          quit (Ctrl-D and Ctrl-C also quit)
 Just type a question to ask the vault."""
@@ -3662,6 +3689,125 @@ def parse_args(argv):
         else:
             i += 1
     return model
+
+
+def _history_text(entries, ui):
+    """Render saved turns into one scrollable block of text."""
+    def c(text, *codes):
+        if ui is None:
+            return text
+        return ui.c(text, *codes)
+
+    p = ui.p if ui is not None else None
+    out = []
+    total = len(entries)
+    for i, rec in enumerate(entries, 1):
+        try:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(rec.get("ts", 0)))
+        except Exception:
+            when = "?"
+        head = "[%d/%d] %s · %s" % (i, total, when, rec.get("model") or "?")
+        mode = rec.get("mode") or "fast"
+        if mode and mode != "fast":
+            head += " · " + mode
+        out.append(c(head, p.MUTED_DARK) if p else head)
+        out.append(c("you> ", p.ACCENT, p.BOLD) if p else "you> ")
+        out[-1] += rec.get("q", "")
+        out.append("")
+        out.append(rec.get("a", "").rstrip())
+        srcs = rec.get("sources") or []
+        if srcs:
+            line = "sources: " + _short_srcs(srcs)
+            out.append(c(line, p.MUTED) if p else line)
+        out.append("")
+    return "\n".join(out)
+
+
+def _page(text, ui):
+    """Show `text` in a pager so it can actually be scrolled.
+
+    Delegating to less buys arrow/PageUp scrolling, / search and a clean exit
+    for free, which is the whole feature. -R keeps our color escapes, -F skips
+    the pager when the output already fits one screen, -X leaves the text in the
+    terminal's own scrollback afterwards instead of wiping it.
+
+    Falls back to a plain print whenever paging is not appropriate (not a TTY,
+    no color/cursor control, no pager on PATH, spawn failed) -- piping `brain`
+    into a file must never block on an interactive pager.
+    """
+    plain = ui is None or getattr(ui, "plain", True)
+    try:
+        tty = sys.stdout.isatty()
+    except Exception:
+        tty = False
+    if plain or not tty:
+        print(text)
+        return
+    import shutil
+    import subprocess
+    pager = os.environ.get("PAGER") or "less"
+    cmd = [pager]
+    if os.path.basename(pager) == "less":
+        cmd = [pager, "-R", "-F", "-X"]
+    if shutil.which(cmd[0]) is None:
+        print(text)
+        return
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        proc.communicate(text.encode("utf-8", "replace"))
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        print(text)
+    finally:
+        # REQUIRED, not tidiness. Mouse reporting is terminal state, not ours,
+        # and less turns it back on behind our back; without this re-arm the
+        # next trackpad scroll at the prompt comes back as arrow-key junk. See
+        # the quiet_scroll() docstring in brain_input.py.
+        try:
+            quiet_scroll()
+            restore_cursor()
+        except Exception:
+            pass
+
+
+HISTORY_DEFAULT = 20   # turns shown by a bare /history
+
+
+def _cmd_history(arg, ui):
+    """Handle /history and its subcommands. `arg` is everything after the word."""
+    if brain_transcript is None or not brain_transcript.enabled():
+        print("The saved transcript is unavailable "
+              "(could not open the cache directory).")
+        return
+    arg = (arg or "").strip()
+
+    if arg == "clear":
+        n = brain_transcript.clear()
+        print("Deleted %d saved turn%s." % (n, "" if n == 1 else "s"))
+        return
+
+    limit = HISTORY_DEFAULT
+    search = None
+    if arg == "all":
+        limit = None
+    elif arg.isdigit():
+        limit = max(1, int(arg))
+    elif arg:
+        # Anything else is a search term, and a search defaults to showing
+        # every match rather than the last 20 of them.
+        search = arg
+        limit = None
+
+    entries = brain_transcript.read(limit=limit, search=search)
+    if not entries:
+        if search:
+            print("No saved turns match \"" + search + "\".")
+        else:
+            print("No saved turns yet. Ask a question and it will be here "
+                  "next time, too.")
+        return
+    _page(_history_text(entries, ui), ui)
 
 
 def _cache_stats_line(cache, cache_enabled):
@@ -3729,6 +3875,13 @@ def main():
         brain_input.setup(os.path.join(CACHE_DIR, ".brain_history"))
     else:
         quiet_scroll()
+
+    # Arm the persistent Q&A transcript that /history reads. Deliberately here
+    # and nowhere else: brain_web.py and advisor_server.py import this module
+    # for handle_question, and never calling enable() is what keeps their
+    # traffic out of your personal history.
+    if brain_transcript is not None:
+        brain_transcript.enable(os.path.join(CACHE_DIR, "transcript.jsonl"))
 
     ui = UI() if UI is not None else None
 
@@ -3833,7 +3986,11 @@ def main():
             continue
         if question in ("/clear",):
             history = []
-            print("History cleared.")
+            print("Conversation context cleared. The saved transcript is "
+                  "untouched -- use /history clear to delete that.")
+            continue
+        if question == "/history" or question.startswith("/history "):
+            _cmd_history(question[len("/history"):], ui)
             continue
         if question == "/model":
             model = choose_model()
@@ -3907,6 +4064,16 @@ def main():
         # Per-question tier selection.
         q_model = DEEP_MODEL if deep_once else model
 
+        # Tell the transcript which model and mode this turn belongs to, so
+        # _finish (which is shared by every answer path and knows neither) does
+        # not need two more parameters threaded through a dozen call sites.
+        if brain_transcript is not None:
+            brain_transcript.set_turn(
+                q_model,
+                "deep" if deep_once else
+                "parent" if parent_once else
+                "scholar" if scholar_once else "fast")
+
         # Start a run so the whole question renders like an ultracode pipeline.
         # When brain_ui is unavailable (ui is None), fall back to a no-op run so
         # the plain path still answers instead of crashing on run.* calls.
@@ -3948,6 +4115,10 @@ def main():
                     history.append({"role": "user", "content": question})
                     history.append({"role": "assistant", "content": cached_answer})
                     trim_history(history)
+                    # The cache fast path returns without ever reaching
+                    # _finish, so it needs its own transcript append or a
+                    # cached answer would be missing from /history entirely.
+                    _log_turn(question, cached_answer, hit.get("sources") or [])
                     continue
                 # Keyword cache missed. Try the semantic concept-router before
                 # RAG: it serves a vetted concept answer when the question embeds
@@ -3970,6 +4141,7 @@ def main():
                         history.append({"role": "user", "content": question})
                         history.append({"role": "assistant", "content": sem_answer})
                         trim_history(history)
+                        _log_turn(question, sem_answer, m.get("sources") or [])
                         continue
                 run.done("cache", "miss · computing fresh")
             else:

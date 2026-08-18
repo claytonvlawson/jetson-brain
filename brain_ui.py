@@ -347,7 +347,7 @@ class UI:
         inner = max(20, w - 3)
         if not self.plain and self._can_edit():
             top = " " + self.c(box["tl"] + box["h"] * inner + box["tr"], p.BORDER)
-            chips = "   " + self.c("/web  /model  /cache  /clear  /exit", p.MUTED_DARK)
+            chips = "   " + self.c("/web  /model  /cache  /history  /clear  /exit", p.MUTED_DARK)
             hint = self.c("⏎ send", p.MUTED_DARK) if self.unicode else self.c("enter=send", p.MUTED_DARK)
             self._w(chips + "    " + hint + "\n")
             self._w(top + "\n")
@@ -372,7 +372,7 @@ class UI:
             # readline's writes would interleave with ours). Keep the old box.
             top = " " + self.c(box["tl"] + box["h"] * inner + box["tr"], p.BORDER)
             bot = " " + self.c(box["bl"] + box["h"] * inner + box["br"], p.BORDER)
-            chips = "   " + self.c("/web  /model  /cache  /clear  /exit", p.MUTED_DARK)
+            chips = "   " + self.c("/web  /model  /cache  /history  /clear  /exit", p.MUTED_DARK)
             hint = self.c("⏎ send", p.MUTED_DARK) if self.unicode else self.c("enter=send", p.MUTED_DARK)
             self._w(top + "\n")
             self._w(" " + self.c(box["v"], p.BORDER) + " "
