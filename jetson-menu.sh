@@ -44,7 +44,55 @@ show_menu(){
   echo "    ${gr}7${r})  Rebuild the vault index (with embeddings)"
   echo "    ${gr}8${r})  Open the README"
   echo "    ${gr}9${r})  ASL sign detection   ${dm}(streams your Mac webcam -> MediaPipe hands)${r}"
+  echo "    ${gr}w${r})  Review fetched web pages     ${dm}($(web_queue_count) waiting for approval)${r}"
   echo "    ${gr}q${r})  Quit to shell   ${dm}(type 'menu' to reopen)${r}"
+}
+
+# Count the web pages waiting for a human decision. Fetches land in the QUEUE
+# (outside the vault root) and are not indexed until someone promotes them, so
+# an un-drained queue is invisible from the chat side. Surfacing the number here
+# is the only place the device tells you it is waiting on you.
+web_queue_count(){
+  local d="$BRAIN_ROOT/queue/_WebCache"
+  [ -d "$d" ] || { echo 0; return; }
+  local n; n=$(ls -1 "$d"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  echo "${n:-0}"
+}
+
+web_review(){
+  if [ ! -f "$BRAIN_ROOT/web_review.py" ]; then
+    echo "web_review.py is not on this device yet. Re-run deploy.sh from the Mac."
+    return
+  fi
+  local choice stem
+  while :; do
+    echo
+    echo "  ${b}Web review queue${r}   ${dm}$(web_queue_count) waiting${r}"
+    echo "    ${gr}l${r})  List the queue"
+    echo "    ${gr}s${r})  Show one page in full"
+    echo "    ${gr}p${r})  Promote a page into the vault ${dm}(indexes it)${r}"
+    echo "    ${gr}r${r})  Reject a page ${dm}(deletes it and denies the url)${r}"
+    echo "    ${gr}x${r})  Retire an ALREADY promoted note"
+    echo "    ${gr}b${r})  Back"
+    printf "\n  ${b}> ${r}"; read -r choice
+    case "$choice" in
+      l|L) python3 "$BRAIN_ROOT/web_review.py" --list; pause ;;
+      s|S) printf "  stem: "; read -r stem
+           [ -n "$stem" ] && python3 "$BRAIN_ROOT/web_review.py" --show "$stem"; pause ;;
+      p|P) printf "  stem to promote: "; read -r stem
+           [ -n "$stem" ] && python3 "$BRAIN_ROOT/web_review.py" --promote "$stem"; pause ;;
+      r|R) printf "  stem to reject: "; read -r stem
+           [ -n "$stem" ] && python3 "$BRAIN_ROOT/web_review.py" --reject "$stem"; pause ;;
+      # Retire is the destructive one: it removes the note, its json, and every
+      # cached answer citing it. web_review.py prints the restart instruction
+      # afterwards, and that restart is required, not advisory, because the
+      # running services keep serving the retired answer from memory.
+      x|X) printf "  stem to retire: "; read -r stem
+           [ -n "$stem" ] && python3 "$BRAIN_ROOT/web_review.py" --retire "$stem"; pause ;;
+      b|B|"") return ;;
+      *) echo "Unknown choice: $choice"; sleep 1 ;;
+    esac
+  done
 }
 
 ollama_pick(){
@@ -112,6 +160,7 @@ main(){
          python3 "$BRAIN_ROOT/build_index.py" --embed; pause ;;
       8) if [ -f "$BRAIN_ROOT/README.md" ]; then less "$BRAIN_ROOT/README.md"; elif [ -f "$HOME/README.md" ]; then less "$HOME/README.md"; else echo "README not found."; sleep 1; fi ;;
       9) asl_detect; pause ;;
+      w|W) web_review ;;
       q|Q|"") clear 2>/dev/null; echo "At the shell. Type ${b}menu${r} to reopen the menu, or ${b}brain${r} to chat."; break ;;
       *) echo "Unknown choice: $choice"; sleep 1 ;;
     esac

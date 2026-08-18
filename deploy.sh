@@ -48,6 +48,94 @@ EOF
 fi
 echo "    SSH ok."
 
+# ---- Deploy lock (remote, because the Jetson is what is shared) ----------
+# This script had NO locking of any kind. Two concurrent deploys race in four
+# places that all corrupt the device rather than merely annoy the operator:
+# the vault rsync runs --delete (run A can delete files run B is mid-transfer
+# on), the scp block writes ~40 files one at a time (the Jetson ends up with a
+# mixture of two checkouts that was never tested together), install.sh runs
+# pip and installs units twice at once, and the systemctl restart can fire
+# BEFORE the other run's scp finishes, so a service loads half-old code and
+# keeps serving it indefinitely.
+#
+# The lock lives on the JETSON, not on the Mac, on purpose. The contended
+# resource is the device, and the racers are typically two different working
+# directories (see mac/worktree-new.sh) or two different machines, so a
+# Mac-local lock would not see them. macOS ships no flock(1), so this uses
+# mkdir, which is atomic on POSIX: it succeeds for exactly one caller and
+# fails for every other.
+DEPLOY_LOCK="${REMOTE}/.deploy-lock"
+DEPLOY_LOCK_STALE_SECONDS="${DEPLOY_LOCK_STALE_SECONDS:-1800}"
+# Identifies THIS run, so release only ever removes a lock we still own.
+LOCK_TOKEN="$(hostname -s 2>/dev/null || echo mac)-$$-$(date +%s)"
+LOCK_HELD=0
+
+_lock_info() { ssh "${JETSON}" "cat '${DEPLOY_LOCK}/owner' 2>/dev/null" 2>/dev/null || true; }
+
+_release_lock() {
+  [[ "${LOCK_HELD}" -eq 1 ]] || return 0
+  # Only remove it if the token inside is still ours. If another run broke our
+  # lock as stale and took over, deleting it would strand THAT run unlocked.
+  ssh "${JETSON}" "
+    if [[ -f '${DEPLOY_LOCK}/token' ]] && [[ \"\$(cat '${DEPLOY_LOCK}/token')\" == '${LOCK_TOKEN}' ]]; then
+      rm -rf '${DEPLOY_LOCK}'
+    fi" >/dev/null 2>&1 || true
+  LOCK_HELD=0
+}
+
+echo "==> Acquiring deploy lock on ${JETSON} ..."
+if ssh "${JETSON}" "mkdir '${DEPLOY_LOCK}' 2>/dev/null"; then
+  LOCK_HELD=1
+else
+  # Someone holds it. Decide between a live deploy and a crashed one.
+  HELD_BY="$(_lock_info)"
+  LOCK_AGE="$(ssh "${JETSON}" "
+    if [[ -d '${DEPLOY_LOCK}' ]]; then
+      now=\$(date +%s); then=\$(stat -c %Y '${DEPLOY_LOCK}' 2>/dev/null || echo \$now)
+      echo \$(( now - then ))
+    else echo -1; fi" 2>/dev/null || echo -1)"
+
+  if [[ "${LOCK_AGE}" -lt 0 ]]; then
+    echo "ERROR: could not acquire or inspect the deploy lock at ${DEPLOY_LOCK}." >&2
+    exit 1
+  fi
+
+  if [[ "${LOCK_AGE}" -ge "${DEPLOY_LOCK_STALE_SECONDS}" ]]; then
+    echo "    WARNING: breaking a STALE deploy lock, held ${LOCK_AGE}s (limit ${DEPLOY_LOCK_STALE_SECONDS}s)." >&2
+    echo "             It was held by: ${HELD_BY:-unknown}" >&2
+    echo "             If that deploy is somehow still running, STOP NOW (ctrl-c): two" >&2
+    echo "             concurrent deploys can leave the Jetson running mixed code." >&2
+    ssh "${JETSON}" "rm -rf '${DEPLOY_LOCK}'" >/dev/null 2>&1 || true
+    if ssh "${JETSON}" "mkdir '${DEPLOY_LOCK}' 2>/dev/null"; then
+      LOCK_HELD=1
+    else
+      echo "ERROR: lost the race to re-take the lock. Another deploy just started." >&2
+      exit 1
+    fi
+  else
+    cat >&2 <<LOCKED
+ERROR: another deploy holds the lock on ${JETSON}.
+       held by : ${HELD_BY:-unknown}
+       age     : ${LOCK_AGE}s (considered stale at ${DEPLOY_LOCK_STALE_SECONDS}s)
+
+       Wait for it to finish. Two concurrent deploys can rsync --delete over
+       each other and restart services mid-scp, leaving the device running a
+       mixture of two checkouts.
+
+       If you are certain that deploy is dead:
+         ssh ${JETSON} "rm -rf '${DEPLOY_LOCK}'"
+LOCKED
+    exit 1
+  fi
+fi
+
+# Record who we are, and release on ANY exit including ctrl-c and a set -e abort.
+ssh "${JETSON}" "
+  printf '%s' '${LOCK_TOKEN}' > '${DEPLOY_LOCK}/token'
+  printf '%s' '${LOCK_TOKEN} from ${HERE} at '\"\$(date)\" > '${DEPLOY_LOCK}/owner'" >/dev/null 2>&1 || true
+trap _release_lock EXIT INT TERM
+echo "    Lock acquired (${LOCK_TOKEN})."
+
 # ---- Remote layout ------------------------------------------------------
 echo "==> Creating remote layout under ${REMOTE} ..."
 ssh "${JETSON}" "mkdir -p '${REMOTE}/vault' '${REMOTE}/index'"
