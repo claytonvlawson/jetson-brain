@@ -44,6 +44,7 @@ import atexit
 import base64
 import hashlib
 import datetime
+import tempfile
 
 
 # -- Fuzzy-match thresholds ---------------------------------------------------
@@ -451,25 +452,44 @@ class AnswerCache:
     def _write_entry(self, path, entry):
         """Write an entry atomically (temp file + rename) and record its size.
 
-        Writing to a sibling .tmp then os.replace() means a crash mid-write can
-        never truncate or corrupt an existing entry -- readers see either the
-        old file or the complete new one. json.dumps with these exact params
+        Temp file in the SAME directory then os.replace(), so a crash mid-write
+        can never truncate or corrupt an existing entry -- readers see either
+        the old file or the complete new one. json.dumps with these exact params
         yields the same bytes json.dump would write, so the recorded size equals
-        the true on-disk size. Returns True on success, False otherwise."""
-        tmp = path + ".tmp"
+        the true on-disk size. Returns True on success, False otherwise.
+
+        Two details this used to get wrong, both of which cost exactly the
+        crash-safety the paragraph above claims. It wrote a PREDICTABLE sibling
+        (path + ".tmp"), so two writers racing on one entry clobbered each
+        other's temp file and one of them replaced a half-written one; mkstemp
+        gives each writer its own. And it never fsynced, so os.replace could be
+        durable while the bytes it points at were still only in page cache --
+        survivable on a clean exit, not on the power loss this box actually
+        sees. Matches web_paths._atomic_write_text."""
+        tmp = None
         try:
             data = json.dumps(entry, ensure_ascii=False, indent=2)
-            with open(tmp, "w", encoding="utf-8") as fh:
+            directory = os.path.dirname(path) or "."
+            fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(data)
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except Exception:
+                    # fsync is best-effort; a filesystem that rejects it must
+                    # not fail the write.
+                    pass
             os.replace(tmp, path)
             self._sizes[path] = len(data.encode("utf-8"))
             return True
         except Exception:
             # Best-effort cleanup so a failed write leaves no stray .tmp behind.
-            try:
-                os.remove(tmp)
-            except Exception:
-                pass
+            if tmp is not None:
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
             return False
 
     # -- lookup ------------------------------------------------------------
