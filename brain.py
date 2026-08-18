@@ -2691,17 +2691,20 @@ def format_web_context(excerpts):
 # guard ships with the wider window rather than after it.
 #
 # CHARS_PER_TOKEN stays pessimistic, but only as pessimistic as the measurement
-# supports. Measured on the device, 2026-08-16, over the 40 retrieval_gold
-# prompts through the real path, against Ollama's own prompt_eval_count
-# (num_predict=1, so prefill only): the true ratio is 4.25 min / 4.61 mean /
-# 4.77 max. The long-standing 3.4 was therefore ~35% pessimistic, and that
-# pessimism was not free -- it was spent dropping tail chunks that would have
-# fit, on a window that was already half empty (a live 8192 arm records
-# prompt_eval_count 3731).
+# supports. Two independent probes on the device, both against Ollama's own
+# prompt_eval_count with num_predict=1 (prefill only), both on llama3.2:3b:
 #
-# 4.0, not 4.25: it sits strictly UNDER the measured minimum, so the estimate is
-# still an over-count on every prompt observed, while recovering most of the
-# wasted budget. The asymmetry is the whole reason this constant is biased at
+#   2026-08-16, 40 retrieval_gold prompts     : 4.25 min / 4.61 mean / 4.77 max
+#   2026-08-18, 12 production-shaped payloads : 4.17 min / 4.38 mean / 4.55 max
+#                                               (11 vault chunks + system prompt)
+#
+# The long-standing 3.4 was therefore ~35% pessimistic, and that pessimism was
+# not free -- it was spent dropping tail chunks that would have fit, on a window
+# that was already half empty (a live 8192 arm records prompt_eval_count 3731).
+#
+# 4.0, not 4.17: it sits strictly UNDER the lower of the two measured minima, so
+# the estimate is still an over-count on every prompt observed, while recovering
+# most of the wasted budget. The asymmetry is the whole reason this constant is biased at
 # all -- overestimating costs one dropped tail chunk, underestimating costs a
 # silently ungrounded answer, because Ollama truncates from the TOP and takes
 # the system prompt with it. Do not raise this to or past 4.25 without a fresh
