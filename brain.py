@@ -523,7 +523,7 @@ _RERANK_VECS = {}            # chunk key -> normalized embedding (in-process mem
 # slower for it). Without a second gate there is no way to measure what BM25
 # alone actually retrieves, which makes "dense vs BM25" unanswerable. Default
 # stays on: this is a measurement gate, not a feature.
-_RERANK_ENABLED = os.environ.get("BRAIN_RERANK", "1") not in ("0", "false", "False", "no")
+_RERANK_ENABLED = _env_flag("BRAIN_RERANK", "1")
 
 # ---- Hybrid dense + BM25 retrieval (Reciprocal Rank Fusion) ----------------
 # When the loaded index carries a dense block (build_index.py --embed), each
@@ -538,7 +538,7 @@ _RERANK_ENABLED = os.environ.get("BRAIN_RERANK", "1") not in ("0", "false", "Fal
 # BRAIN_HYBRID=0, handle_question falls back to the exact BM25 + rerank path, so
 # an un-embedded index (and the A/B baseline) behaves precisely as before. The
 # env gate lets one dense index be measured both ways: BRAIN_HYBRID=0 vs =1.
-HYBRID_ENABLED = os.environ.get("BRAIN_HYBRID", "1") not in ("0", "false", "False", "no")
+HYBRID_ENABLED = _env_flag("BRAIN_HYBRID", "1")
 RRF_K = 60          # standard RRF damping constant; larger flattens rank weighting
 RRF_POOL = 60       # fuse this many top docs from each ranker
 DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
@@ -589,9 +589,8 @@ DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
 # versus 0.07s, ~48x, entirely the extra 3B generation, measured on Metal. The
 # 8GB Orin will be worse. Set BRAIN_HYDE=0 to buy that latency back at the cost
 # of three questions.
-HYDE_ENABLED = os.environ.get("BRAIN_HYDE", "1") not in ("0", "false", "False", "no")
+HYDE_ENABLED = _env_flag("BRAIN_HYDE", "1")
 HYDE_NUM_PREDICT = _env_int("BRAIN_HYDE_NUM_PREDICT", 96, lo=16, hi=512)
-HYDE_TIMEOUT = 30
 HYDE_SYSTEM = (
     "Write a short, plausible encyclopedia-style passage that would ANSWER the "
     "user's question. Two or three sentences. State it as fact, name the "
@@ -621,7 +620,7 @@ HYDE_SYSTEM = (
 # with no index rebuild. The same predicate is honored on the exact path too, so a
 # filter behaves identically whichever dense search runs. Env-configured by
 # default; callers may also pass an explicit predicate to _dense_scores.
-ANN_ENABLED      = os.environ.get("BRAIN_ANN", "0") not in ("0", "false", "False", "no")
+ANN_ENABLED      = _env_flag("BRAIN_ANN", "0")
 # nprobe default 20: on the current ~1.3k-row / ~36-cell index that is measured
 # LOSSLESS for what reaches the LLM -- the dense top-8 (>= every persona's keep_k)
 # matches the exact scan on all eval questions, and top-60 RRF-pool recall is
@@ -1287,6 +1286,20 @@ def load_index():
         # pickle. Rebuild it from chunk text with the same tokenizer as build.
         # (build_index skips empty-token chunks, so no doc is empty here.)
         tokenized = [tokenize(c.get("text") or "") for c in chunks]
+    # BM25Okapi keeps every token as a key in its per-document doc_freqs dict,
+    # so an uninterned corpus holds one str object per (token, document) pair:
+    # 169k objects for 12.6k distinct tokens on this vault, 7.9 MB of which 7.3
+    # is duplicate. Interning collapses them to one object per distinct token.
+    # Hash and equality are unchanged, so every BM25 score is bit-for-bit the
+    # same; this buys memory only, and costs one pass over the corpus at load.
+    # In place, one document at a time: the whole-corpus comprehension this
+    # replaces held a second complete token list alongside the first and
+    # pushed peak RSS UP by ~3 MB while lowering steady state, which on a box
+    # that OOMs is the wrong trade. Rebinding per document keeps the extra
+    # allocation to a single doc.
+    tokenized = list(tokenized)
+    for _i, _doc in enumerate(tokenized):
+        tokenized[_i] = [sys.intern(_t) for _t in _doc]
     if not chunks or len(chunks) != len(tokenized):
         print("The index looks empty or corrupt.")
         print("Rebuild it with:  python3 " + os.path.join(BRAIN_ROOT, "build_index.py"))
@@ -1345,12 +1358,42 @@ def index_mtime():
         return None
 
 
+_TRIM_PENDING = False
+
+
+def _release_freed_arenas():
+    """Hand heap arenas freed by a dropped index back to the OS.
+
+    A reload transiently holds two complete indexes (~30 MB on this vault).
+    glibc keeps the freed arenas on its own free lists rather than returning
+    them, so a daemon that reloads on every auto-learn cycle ratchets its RSS
+    up and never comes back down. malloc_trim() is the only thing that
+    actually releases them. Best effort: a no-op where libc.so.6 is not the
+    malloc in play (macOS, musl), where the ratchet simply remains."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
 def maybe_reload_index(chunks, bm25, meta, loaded_mtime):
     """Hot-reload the index when update_index.py (auto-learn) has replaced
     the pickle since it was loaded. Returns (chunks, bm25, meta, mtime,
     reloaded). Never raises and never kills the caller: any load failure
     keeps the current in-memory index and records the new mtime so a broken
     pickle is not retried on every question."""
+    global _TRIM_PENDING
+    # A previous call swapped in a new index. Every caller rebinds its own
+    # names from our return value, so only now -- one call later -- has the
+    # old index actually lost its last reference and become reclaimable.
+    # Trimming inside the reload itself would run while the caller still
+    # holds it, and free nothing.
+    if _TRIM_PENDING:
+        _TRIM_PENDING = False
+        import gc
+        gc.collect()
+        _release_freed_arenas()
     current = index_mtime()
     if current is None or (loaded_mtime is not None
                            and current <= loaded_mtime):
@@ -1359,6 +1402,7 @@ def maybe_reload_index(chunks, bm25, meta, loaded_mtime):
         new_chunks, new_bm25, new_meta = load_index()
     except (SystemExit, Exception):
         return chunks, bm25, meta, current, False
+    _TRIM_PENDING = True
     return new_chunks, new_bm25, new_meta, current, True
 
 
@@ -2311,15 +2355,28 @@ def _rank_excerpts_by_relevance(query, candidates):
     """Reorder (url, text) candidates by query<->excerpt cosine using the same
     nomic-embed-text pipeline as _rerank_by_embedding. Returns candidates
     unchanged (DDG order) on any embed failure -- never raises, never blocks.
-    Caller is responsible for slicing to MAX_WEB_FETCH afterward."""
-    if len(candidates) < 2:
+    Caller is responsible for slicing to MAX_WEB_FETCH afterward.
+
+    Shares _RERANK_ENABLED with _rerank_by_embedding: an unreachable embedder
+    is a property of the box, not of the path that noticed it, so either one
+    tripping the switch spares the other a RERANK_TIMEOUT per query. Without
+    this the vault path went quiet after one failure while the web path kept
+    paying the full timeout on every single search.
+
+    It deliberately does NOT share _RERANK_VECS. Vault chunks are a fixed
+    corpus worth memoizing; web excerpts are new URLs on every query, so the
+    same memo here would be an unbounded dict that never hits."""
+    global _RERANK_ENABLED
+    if not _RERANK_ENABLED or len(candidates) < 2:
         return candidates
     try:
         from semantic_cache import _embed, _normalize, _dot
     except Exception:
+        _RERANK_ENABLED = False
         return candidates
     qraw = _embed(query, OLLAMA_HOST, RERANK_EMBED_MODEL, RERANK_TIMEOUT)
     if not qraw:
+        _RERANK_ENABLED = False
         return candidates
     qv = _normalize(qraw)
     scored = []
@@ -2721,7 +2778,7 @@ except (KeyError, ValueError):
 # Leave room for the answer (num_predict) plus chat-template overhead, so the
 # guard trims before llama.cpp has to.
 CTX_RESERVE_TOKENS = 768
-CTX_FIT_ENABLED = os.environ.get("BRAIN_CTX_FIT", "1") not in ("0", "false", "False", "no")
+CTX_FIT_ENABLED = _env_flag("BRAIN_CTX_FIT", "1")
 LAST_CTX_FIT = {}
 
 
@@ -3510,19 +3567,6 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
             "order": order, "order_full": order_full if order_full is not None
             else order, "keep_k": keep_k, "retrieved": retrieved,
             "mode": mode, "top_score": top_score, "n_subq": len(sub_rankings)}
-
-
-def _scholar_auto_hook(question, intent):
-    """UNREACHED ON PURPOSE. Nothing calls this.
-
-    The place a future BRAIN_SCHOLAR_AUTO would decide to promote a question to
-    the scholar persona on its own. It is a stub rather than an implementation
-    because auto-promotion changes what the DEFAULT persona does on questions
-    nobody asked to be deep, and the only honest way to buy that is an ablation
-    that prices scholar against default on the same battery. The flag is defined
-    (so an arm can record it) and wired to nothing (so it cannot silently move a
-    number). Delete this function or call it, but do not let it half-exist."""
-    raise NotImplementedError("BRAIN_SCHOLAR_AUTO is not implemented")
 
 
 def _scholar_read_frontmatter(source):

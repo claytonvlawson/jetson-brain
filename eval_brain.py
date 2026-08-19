@@ -845,9 +845,25 @@ def env_fingerprint(args):
     fp = {
         "index": os.environ.get("BRAIN_INDEX", brain.INDEX_PATH),
         "persona": args.mode,
-        "seed": os.environ.get("BRAIN_SEED"),
+        # The EFFECTIVE seed, off GEN_OPTIONS, for the same reason every arm
+        # below is read off the module: it is what the code will actually do.
+        # A raw environ read recorded null whenever brain.py supplied the seed
+        # itself, which is the run an artifact most needs to prove was pinned.
+        "seed": (str(brain.GEN_OPTIONS["seed"])
+                 if "seed" in (getattr(brain, "GEN_OPTIONS", {}) or {})
+                 else os.environ.get("BRAIN_SEED")),
         # Retrieval arms.
         "BRAIN_HYBRID": flag(brain.HYBRID_ENABLED),
+        # BRAIN_HYBRID=0 alone is not a lexical arm: it falls back to BM25 plus
+        # the query-time embedding rerank, so the "no dense" arm still embeds
+        # RERANK_CAND_N chunks per query. Without this key two runs differing
+        # only in whether the rerank ran emitted byte-identical headers while
+        # measuring different retrievers -- the exact mislabelling this
+        # fingerprint exists to prevent. eval_retrieval.py already recorded it.
+        "BRAIN_RERANK": flag(getattr(brain, "_RERANK_ENABLED", False)),
+        # Pins _build_ivf's k-means, so it CAN move retrieval whenever
+        # BRAIN_ANN=1, and was previously unrecorded on this side.
+        "BRAIN_ANN_SEED": str(getattr(brain, "ANN_SEED", "")),
         "BRAIN_HYDE": flag(brain.HYDE_ENABLED),
         "BRAIN_DECOMPOSE": flag(brain.DECOMPOSE_ENABLED),
         "BRAIN_TOP_K_FAST": str(brain.TOP_K_FAST),

@@ -46,6 +46,16 @@ same_order = brain._rank_excerpts_by_relevance("the query", candidates)
 check("_rank_excerpts_by_relevance falls back to DDG order on embed failure",
       same_order == candidates)
 
+# ---- ...and latches the shared kill switch off, so the NEXT query does not --
+# pay another RERANK_TIMEOUT to rediscover the same dead embedder. This is the
+# same switch _rerank_by_embedding trips on the vault side: an unreachable
+# embedder is a property of the box, not of the path that noticed it.
+check("_rank_excerpts_by_relevance disables the reranker after an embed failure",
+      brain._RERANK_ENABLED is False)
+check("...and then no-ops while disabled",
+      brain._rank_excerpts_by_relevance("the query", candidates) == candidates)
+brain._RERANK_ENABLED = True   # re-arm: the cases below assume a live embedder
+
 # ---- _rank_excerpts_by_relevance: partial embed failure sinks unembeddable --
 def flaky_embed(text, host, model, timeout):
     if text == "the query":
@@ -84,6 +94,7 @@ def fake_embed_web(text, host, model, timeout):
     idx = int(text[-1])
     return [1.0, 0.0] if idx == 3 else [0.0, float(idx + 1)]
 semantic_cache._embed = fake_embed_web
+brain._RERANK_ENABLED = True   # re-arm after the failure cases above
 brain.WEB_SEMANTIC_ENABLED = True
 fetch_calls.clear()
 excerpts = brain.gather_web_context("q")

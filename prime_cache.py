@@ -600,12 +600,7 @@ KNOWLEDGE = [
     {
         "id": "maryland_school_deaf",
         "canonical_question": "Maryland School for the Deaf helps a late-signing child with language gaps",
-        "answer": "The Maryland School for the Deaf (MSD) runs two campuses, one in Frederick and one in Columbia, Maryland. Both follow a bilingual-bimodal model in which ASL and English are used together from the youngest grades onward, and that model is daily practice there, not theory. On the Frederick and Columbia campuses language is never a barrier, because everyone signs. Since teachers, staff, and peers all sign, a deaf child gets full, direct visual access to language rather than the partial, mediated communication a mainstream room often offers. Placing a deaf child among fluent signers and Deaf adults supports development rather than hindering it, giving accessible input a mainstream setting frequently cannot. This kind of early, fully accessible environment is the recognized antidote to language deprivation described by scholars such as Wyatte Hall. His work emphasizes that language deprivation stems from a lack of accessible early language input, not from deafness itself. Deaf children who arrive with little or no language typically begin acquiring ASL once they are immersed in a fully signing community, and that immersion in fluent ASL, surrounded by Deaf adults, is the direct remedy for their prior language deprivation. MSD also shows intergenerational cultural transmission: Deaf culture and language pass down from older students and Deaf staff to the younger children. Once accessible language is in place, full, direct communication accelerates a child's overall cognitive, social, and academic growth. That is the quiet power of a school where every hand speaks.",
-        "sources": [
-            "ThesisVault - Maryland School for the Deaf",
-            "Humphries et al 2012 - Language-Rich Environments",
-            "Padden & Humphries - Deaf in America",
-        ],
+        "answer": "The Maryland School for the Deaf runs two campuses, one in Frederick and one in Columbia, and on both ASL and English live side by side from the earliest grades. ASL is the primary language of instruction, not an accommodation, so a deaf child gets lessons, discussions, and all the incidental learning of a school day directly, without waiting on an interpreter. For a child who arrives late to sign, already carrying language gaps, that immersion is the remediation itself: surrounded by fluent Deaf teachers and signing peers, the child can still acquire a full first language. Deaf alumni return as Deaf teachers, and language and culture pass from Deaf staff and fluent signing peers to the young, an intergenerational thread that runs back through generations of alumni. MSD cites the national statistic that more than 95 percent of deaf and hard of hearing children are born to hearing families who do not sign; that is a nationwide figure, not a count of MSD's own families, and it is why the school's Family Education program teaches families ASL free of charge during the birth to five years, when brain development is at its most active. Governance now matches the mission: under House Bill 1052, Chapter 721, effective July 1, 2026, the Board of Trustees has thirteen members, at least seven of them deaf. A November 2025 Baltimore Sun guest commentary by Kelby Brick, Wyatte Hall, and Superintendent John Serrano calls MSD a safe harbor for these children. That is the quiet power of a school where every hand speaks.",
         "keyword_variants": [
             "relocating to Maryland, our late-signing seven-year-old has big language gaps",
             "everyone steers us toward the Deaf school in Frederick over the local district",
@@ -647,8 +642,14 @@ KNOWLEDGE = [
             "public deaf school Maryland ASL and English in one classroom",
             "MSD deaf mentors older students pass down culture",
             "whats a language rich school for deaf children in MD",
-            "Maryland school deaf full communication access every teacher signs",
+            "Maryland school deaf full communication access every teacher signs"
         ],
+        "sources": [
+            "Maryland School for the Deaf",
+            "Bilingual Bimodal Protective Factors",
+            "Critical Period and Brain",
+            "American Sign Language"
+        ]
     },
     {
         "id": "deaf_community_transmission",
@@ -1778,61 +1779,3 @@ _PARENT_ENTRIES = [
 ]
 KNOWLEDGE.extend(_PARENT_ENTRIES)
 
-_MSD_REFRESH = {
-    "id": "maryland_school_deaf",
-    "canonical_question": "Maryland School for the Deaf helps a late-signing child with language gaps",
-    "answer": "The Maryland School for the Deaf runs two campuses, one in Frederick and one in Columbia, and on both ASL and English live side by side from the earliest grades. ASL is the primary language of instruction, not an accommodation, so a deaf child gets lessons, discussions, and all the incidental learning of a school day directly, without waiting on an interpreter. For a child who arrives late to sign, already carrying language gaps, that immersion is the remediation itself: surrounded by fluent Deaf teachers and signing peers, the child can still acquire a full first language. Deaf alumni return as Deaf teachers, and language and culture pass from Deaf staff and fluent signing peers to the young, an intergenerational thread that runs back through generations of alumni. MSD cites the national statistic that more than 95 percent of deaf and hard of hearing children are born to hearing families who do not sign; that is a nationwide figure, not a count of MSD's own families, and it is why the school's Family Education program teaches families ASL free of charge during the birth to five years, when brain development is at its most active. Governance now matches the mission: under House Bill 1052, Chapter 721, effective July 1, 2026, the Board of Trustees has thirteen members, at least seven of them deaf. A November 2025 Baltimore Sun guest commentary by Kelby Brick, Wyatte Hall, and Superintendent John Serrano calls MSD a safe harbor for these children. That is the quiet power of a school where every hand speaks.",
-    "keyword_variants": [
-        "relocating to Maryland, our late-signing seven-year-old has big language gaps",
-        "everyone steers us toward the Deaf school in Frederick over the local district",
-        "what specifically about that school helps a child who arrived with so little language",
-        "how does MSD help a deaf kid who showed up with almost no language finally catch up",
-        "Maryland School for the Deaf Frederick and Columbia campuses",
-        "MSD residential K-12 School for the Deaf, everyone signs all day",
-        "IEP placement: signing School for the Deaf versus local mainstream district",
-        "mainstream with an interpreter versus a School for the Deaf where teachers sign",
-        "illusion of inclusion, mainstreaming alone does not prevent language deprivation",
-        "IDEA Part B least restrictive environment misread for a language-deprived deaf child",
-        "signing environment with Deaf teachers, Deaf peers, and Deaf staff",
-        "language-rich School for the Deaf lets a late-exposed child catch up",
-        "is the state Deaf school in Frederick better than the mainstream program",
-        "residential day program placement for a deaf child with little first language",
-        "Maryland School for the Deaf",
-        "MSD Frederick",
-        "deaf school bilingual",
-        "language rich deaf school",
-        "residential deaf school",
-        "MSD ASL English",
-        "deaf boarding school Maryland",
-        "My son is deaf and everyone keeps telling me the state school up in Frederick would be better for his language than the mainstream program he's in now, but honestly, wouldn't surrounding him with only other deaf kids just hold him back?",
-        "I teach elementary students and I'm trying to understand the actual mechanism: what happens at MSD's Frederick and Columbia campuses that lets a deaf kid who showed up with almost no language finally start catching up?",
-        "MSD Columbia Maryland deaf campus",
-        "best deaf school in Maryland for my son",
-        "does the Maryland deaf school teach kids in sign",
-        "Frederick Maryland school for deaf children ASL",
-        "my daughter is deaf is a residential school in Maryland good",
-        "state school for the deaf Maryland worth it",
-        "Merryland school for the deaf frederick",
-        "how does MSD help kids who arrive with no language",
-        "teacher here curious how MSD runs bilingual instruction",
-        "deaf kids thrive at the Maryland school signing environment",
-        "is MSD a good place for language deprived deaf children",
-        "Maryland deaf school Deaf culture and deaf staff",
-        "should I send my deaf child to the Frederick campus",
-        "grad student researching the Maryland School for the Deaf bilingual model",
-        "public deaf school Maryland ASL and English in one classroom",
-        "MSD deaf mentors older students pass down culture",
-        "whats a language rich school for deaf children in MD",
-        "Maryland school deaf full communication access every teacher signs"
-    ],
-    "sources": [
-        "Maryland School for the Deaf",
-        "Bilingual Bimodal Protective Factors",
-        "Critical Period and Brain",
-        "American Sign Language"
-    ]
-}
-for _i, _e in enumerate(KNOWLEDGE):
-    if _e.get("id") == _MSD_REFRESH["id"]:
-        KNOWLEDGE[_i] = _MSD_REFRESH
-        break

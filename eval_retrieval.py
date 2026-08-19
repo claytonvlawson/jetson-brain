@@ -332,7 +332,7 @@ def main():
     chunks, bm25, meta = brain.load_index()
     fp = env_fingerprint(meta, chunks, rows)
 
-    if os.environ.get("BRAIN_AUTOLEARN", "1") not in ("0", "false", "False", "no"):
+    if os.environ.get("BRAIN_AUTOLEARN", "1") not in ("0", "false", "False", "no", ""):
         sys.stderr.write(
             "WARNING: BRAIN_AUTOLEARN is on; update_index.py can mutate the "
             "index mid-run. Set BRAIN_AUTOLEARN=0.\n")
