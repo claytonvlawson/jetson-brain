@@ -112,8 +112,30 @@ check_true("longer text estimates more",
 # Pessimistic by design: assuming FEWER chars per token overestimates the count,
 # which is the safe direction. Overestimating costs one dropped tail chunk;
 # underestimating costs a silently ungrounded answer.
-check_true("chars-per-token stays pessimistic", brain.CHARS_PER_TOKEN <= 3.6,
-           "CHARS_PER_TOKEN=%r" % (brain.CHARS_PER_TOKEN,))
+#
+# The bound is the MEASURED MINIMUM, not a round number. The old bound of 3.6
+# predates any measurement and cost ~35% of the budget for nothing.
+#
+# Two independent measurements against Ollama's own prompt_eval_count, both on
+# llama3.2:3b, both prefill-only (num_predict=1):
+#   2026-08-16, 40 retrieval_gold prompts     : 4.25 min / 4.61 mean / 4.77 max
+#   2026-08-18, 12 production-shaped payloads : 4.17 min / 4.38 mean / 4.55 max
+#                                               (11 vault chunks + system prompt)
+#
+# Take the LOWER minimum. The second run samples the payload shape the answer
+# path actually sends and found a tighter floor than the first, which is the
+# direction that matters: a bound set on the looser number would admit a
+# CHARS_PER_TOKEN that under-counts real prompts. Keep the strict inequality --
+# at exactly the minimum the estimator stops being conservative on the tightest
+# prompt observed.
+#
+# This ratio is a property of the TOKENIZER, so it must be re-measured if the
+# fast model changes. It is not a property of the vault.
+MEASURED_MIN_CHARS_PER_TOKEN = 4.17
+check_true("chars-per-token stays under the measured minimum",
+           brain.CHARS_PER_TOKEN < MEASURED_MIN_CHARS_PER_TOKEN,
+           "CHARS_PER_TOKEN=%r must be < %r" % (brain.CHARS_PER_TOKEN,
+                                                MEASURED_MIN_CHARS_PER_TOKEN))
 
 if FAILURES:
     print("FAIL (%d)" % len(FAILURES))

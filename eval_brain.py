@@ -213,7 +213,15 @@ VIOLATION_PENALTY = 25   # points docked per must-not claim the answer actually 
 # specifically, which is exactly what a run that got slower and more verbose
 # produces: the harness would report a quality regression that is really its
 # own truncation. Match the answerer's window; give the verdict room to close.
-JUDGE_NUM_CTX = 6144
+#
+# DERIVED, not restated. This was hardcoded at 6144 and stayed there while the
+# answerer moved 6144 -> 8192 -> 24576, so "match the answerer's window" quietly
+# stopped being true and the judge graded a truncated view of exactly the long
+# answers a good arm produces. Reading it from brain also keeps the judge on the
+# SAME loaded model instance when it is the default self-judge: Ollama keys a
+# loaded model by its options, so a different num_ctx forces a second load,
+# which is how an 8 GB board ends up holding two copies of one 3B.
+JUDGE_NUM_CTX = brain.GEN_OPTIONS["num_ctx"]
 JUDGE_NUM_PREDICT = 512
 
 

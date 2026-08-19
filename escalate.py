@@ -53,9 +53,21 @@ def _flag(name, default="0"):
 ESCALATE_ENABLED = _flag("ESCALATE_ENABLED", "1")
 ESCALATE_VERBOSE = _flag("ESCALATE_VERBOSE", "0")
 
+# num_ctx here must track brain.GEN_OPTIONS. It was pinned at 6144 against a
+# remote arm at 8192, so the local-vs-remote comparison this module exists to
+# make was measuring the window difference as well as the model difference.
+# Imported defensively: escalate.py is a thin client that stays importable
+# without brain.py, so a missing brain degrades to the previous literal rather
+# than breaking the module.
+try:
+    import brain as _brain
+    _LOCAL_NUM_CTX = _brain.GEN_OPTIONS["num_ctx"]
+except Exception:
+    _LOCAL_NUM_CTX = 6144
+
 LOCAL_GEN_OPTIONS = {
     "num_predict": 640,
-    "num_ctx": 6144,
+    "num_ctx": _LOCAL_NUM_CTX,
     "temperature": 0.2,
     "repeat_penalty": 1.1,
     "num_gpu": 999,

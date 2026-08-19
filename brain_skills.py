@@ -34,8 +34,10 @@ web_search on the original question (or search_vault on it when the web is
 off), which is the safe default action - the same "never let a parse failure
 become a crash or a dead end" rule as the routing call.
 
-WHY THE SELECTION CALL IS TINY: num_ctx is 6144 and Ollama truncates from the
-TOP, which silently eats the system prompt and with it the grounding contract.
+WHY THE SELECTION CALL IS TINY: Ollama truncates from the TOP, which silently
+eats the system prompt and with it the grounding contract. The argument is about
+truncation ORDER, not about any particular window, so it holds at 6144 and it
+holds at 24576: a selection prompt that stays small can never reach the edge.
 brain.py:2538-2541 deliberately drops the vault context from its routing call to
 save ~1.5-2k prefill tokens; the same reasoning applies to every selection call
 here, so the selection prompt carries only the menu plus hard-capped one-line
@@ -92,9 +94,11 @@ MAX_STEPS = int(os.environ.get("BRAIN_SKILLS_MAX_STEPS", "3"))
 # blow past any step budget.
 DEADLINE_S = float(os.environ.get("BRAIN_SKILLS_DEADLINE", "45"))
 
-# Observation caps, sized against num_ctx=6144. ~4 chars/token puts the whole
-# context at roughly 24k chars; the selection prompt gets a small slice of it so
-# the menu (the part that must survive top-truncation) is never at risk.
+# Observation caps. These are absolute, NOT a fraction of num_ctx, and they stay
+# where they are now that the window has moved: the menu is what must survive
+# top-truncation, and the cheapest way to guarantee that is a selection prompt
+# that never grows with the window. Widening these because there is room would
+# also make the selection call slower to prefill for no gain in label quality.
 OBS_CHAR_CAP = 240        # per observation line
 OBS_TOTAL_CAP = 1200      # all observations together
 
@@ -129,12 +133,18 @@ ARG_CHAR_CAP = 400
 # noise on a label is pure loss (the same reason eval runs pin
 # BRAIN_TEMPERATURE=0, brain.py:83-88). num_predict is tiny because the protocol
 # is one line, which also caps how long a runaway reply can stall the loop.
-# brain.py builds ctx.chat_select by merging this over GEN_OPTIONS; when it is
-# not injected the loop degrades to ctx.chat rather than failing.
+# brain.py builds ctx.chat_select by merging this over the tier's options; when
+# it is not injected the loop degrades to ctx.chat rather than failing.
+#
+# num_ctx is deliberately ABSENT. It used to be pinned at 6144 here, and because
+# brain.py merges this dict LAST, that pin silently overrode production every
+# time the window moved -- it never followed 6144 -> 8192 and would not have
+# followed 8192 -> 24576 either. The selection call has no business owning the
+# window: it should see exactly what the tier it runs on sees. Only the two
+# things this call genuinely needs to differ on are stated here.
 SELECT_GEN_OPTIONS = {
     "temperature": 0.0,
     "num_predict": 48,
-    "num_ctx": 6144,
 }
 
 # ---- Provenance labels -----------------------------------------------------
