@@ -353,13 +353,20 @@ Next steps:
        sudo systemctl enable --now brain-ollama-shim.service
      Serves a fake Ollama API on LOOPBACK, port 11435 (never 11434, which the
      real Ollama owns). Unlike brain-web.service it does not bind the tailnet IP,
-     because the Mac running Obsidian is not on the tailnet. Open the tunnel on
-     the Mac (once per boot, it stays up in the background):
-       ssh -f -N -L 11435:127.0.0.1:11435 ${JETSON}
+     because the Mac running Obsidian is not on the tailnet.
+     NOTE: a deploy copies the unit to ${REMOTE} but never reinstalls it into
+     /etc/systemd/system, so a stale copy there keeps running unchanged. Re-run
+     the three lines above whenever the unit file itself changes.
+     Then install the tunnel LaunchAgent on the Mac (once; it survives reboot
+     and redials itself, which a bare 'ssh -f -N' does not - with no keepalive
+     it wedges while still holding the port):
+       cp mac/ai.learnwithclay.jetson-tunnel.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.learnwithclay.jetson-tunnel.plist
      Then in Obsidian: Settings -> Smart Chat -> model platform "Ollama (Local)"
      -> Ollama host = http://127.0.0.1:11435 -> model "jetson-brain". Answers
      stream in token by token. See README.md for the full click path.
      Status: systemctl status brain-ollama-shim.service
+     Diagnose the whole Mac-to-Jetson chain in one shot: bash mac/brain-doctor
 
 DEPLOY OK: ${MD_COUNT} md files, code + install pushed to ${JETSON}:${REMOTE}
 EOF

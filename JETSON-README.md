@@ -142,10 +142,21 @@ sudo systemctl enable --now brain-ollama-shim.service
 systemctl status brain-ollama-shim.service
 ```
 
+The unit binds loopback, not the tailnet address, because the Mac running
+Obsidian has no Tailscale. The Mac reaches it through an SSH tunnel over the
+USB-C link, installed once as a LaunchAgent:
+
+```
+cp mac/ai.learnwithclay.jetson-tunnel.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.learnwithclay.jetson-tunnel.plist
+```
+
 In Obsidian: Settings -> Smart Chat -> Model Platform "Ollama (Local)" ->
-Ollama host `http://100.x.x.x:11435` -> Model `jetson-brain` (fast) or
-`jetson-brain-deep` (7B). Port 11435 only; 11434 belongs to the real Ollama.
-Full click path and every `SHIM_*` variable: `README.md`.
+Ollama host `http://127.0.0.1:11435` (the local end of the tunnel) -> Model
+`jetson-brain` (fast) or `jetson-brain-deep` (7B). Port 11435 only; 11434
+belongs to the real Ollama. When anything is off, `bash mac/brain-doctor` on
+the Mac names the broken link. Full click path and every `SHIM_*` variable:
+`README.md`.
 
 ---
 

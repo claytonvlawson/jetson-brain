@@ -19,7 +19,11 @@
 
 set -uo pipefail
 
-JETSON_HOST="${JETSON_HOST:-jetson}"
+# Defaults to the USB-C route, matching the tunnel LaunchAgent. This Mac has
+# no Tailscale, so `jetson` (the tailnet IP) times out here. Override with
+# JETSON_HOST=jetson once Tailscale is installed and the checks below will
+# switch to the tailnet chain on their own.
+JETSON_HOST="${JETSON_HOST:-jetson-usb}"
 JETSON_PEER="${JETSON_PEER:-snowbeach}"
 SHIM_URL="${SHIM_URL:-http://127.0.0.1:11435}"
 TUNNEL_LABEL="ai.learnwithclay.jetson-tunnel"
@@ -43,6 +47,42 @@ die() {
 }
 
 printf '\nbrain-doctor: Mac -> Jetson brain\n\n'
+
+# Which transport is this host alias actually on? The tailnet checks below are
+# meaningful only when we are reaching the Jetson over Tailscale. Over the USB-C
+# link they are not just noise, they are wrong: they hard-fail on a Mac with no
+# Tailscale installed while the cable underneath is working perfectly.
+JETSON_IP="$(ssh -G "$JETSON_HOST" 2>/dev/null | awk '/^hostname /{print $2; exit}')"
+case "$JETSON_IP" in
+  192.168.55.*) TRANSPORT=usb ;;
+  *)            TRANSPORT=tailnet ;;
+esac
+
+if [[ "$TRANSPORT" == usb ]]; then
+
+# ---- 1u. The USB-C link to the Jetson is up -----------------------------
+# The Mac side of the gadget link is a bridge/ethernet interface holding a
+# 192.168.55.100 address. No interface means the cable is out or the Jetson is
+# off; an interface with no ping means the Jetson is booting or wedged.
+if ! ifconfig 2>/dev/null | grep -q 'inet 192\.168\.55\.'; then
+  die "no 192.168.55.x address on this Mac: the USB-C link is down" \
+      "Plug the Jetson back into the Mac with the USB-C cable, give it ~20s to" \
+      "enumerate, then re-run. Check System Settings > Network for an entry" \
+      "that appears when the cable goes in." \
+      "" \
+      "If the cable is in and this still fails, the Jetson is powered off or" \
+      "has not finished booting."
+fi
+ok "USB-C link is up (this Mac holds a 192.168.55.x address)"
+
+if ! ping -c 1 -t 3 "$JETSON_IP" >/dev/null 2>&1; then
+  note "note: ${JETSON_IP} did not answer ICMP. Not fatal on its own; the ssh"
+  note "      check below is the one that decides."
+else
+  ok "Jetson answers at ${JETSON_IP}"
+fi
+
+else
 
 # ---- 1. Tailscale is installed and running on this Mac ------------------
 if ! command -v tailscale >/dev/null 2>&1; then
@@ -138,6 +178,8 @@ else
       "${ping_out}"
 fi
 
+fi  # end of the tailnet-only checks
+
 # ---- 5. SSH actually works ----------------------------------------------
 ssh_err="$(ssh -o ConnectTimeout=8 -o BatchMode=yes "$JETSON_HOST" true 2>&1)"
 if [[ $? -ne 0 ]]; then
@@ -158,11 +200,35 @@ ok "ssh ${JETSON_HOST} answers"
 if ! curl -sf --max-time 5 "${SHIM_URL}/api/tags" >/dev/null 2>&1; then
   holder="$(lsof -nP -iTCP:11435 -sTCP:LISTEN 2>/dev/null | tail -n +2)"
   if [[ -n "$holder" ]]; then
-    die "something holds port 11435 but /api/tags did not answer" \
-        "This is the wedged-forwarder case: the socket accepts and then hangs." \
-        "${holder}" \
+    # A local listener that does not answer has two very different causes, and
+    # the fixes point at opposite machines. Ask the Jetson directly: if the shim
+    # answers on its own loopback, the forwarder is the corpse; if it does not,
+    # the tunnel is healthy and is faithfully relaying a refusal.
+    if ssh -o ConnectTimeout=8 -o BatchMode=yes "$JETSON_HOST" \
+         'curl -sf --max-time 5 http://127.0.0.1:11435/api/tags >/dev/null' 2>/dev/null; then
+      die "something holds port 11435 but /api/tags did not answer" \
+          "The shim IS answering on the Jetson's own loopback, so the far end is" \
+          "fine and this is the wedged-forwarder case: the socket accepts and" \
+          "then hangs." \
+          "${holder}" \
+          "" \
+          "launchctl kickstart -k gui/\$(id -u)/${TUNNEL_LABEL}"
+    fi
+    die "the tunnel is up, but nothing is listening on the Jetson's 127.0.0.1:11435" \
+        "Not a tunnel problem. The shim is not running, or it is running but" \
+        "bound to the tailnet address instead of loopback, which the tunnel" \
+        "cannot reach. A stale unit file in /etc/systemd/system does exactly" \
+        "this: deploy.sh copies the repo unit to /mnt/nvme/brain but never" \
+        "reinstalls it, so an old tailnet-binding copy can survive forever." \
         "" \
-        "launchctl kickstart -k gui/\$(id -u)/${TUNNEL_LABEL}"
+        "  ssh ${JETSON_HOST} 'systemctl status brain-ollama-shim.service --no-pager'" \
+        "  ssh ${JETSON_HOST} \"ss -ltnp | grep 11435\"    # which address is it on?" \
+        "" \
+        "If it is bound to 100.x, reinstall the loopback unit:" \
+        "  ssh ${JETSON_HOST}" \
+        "  sudo cp /mnt/nvme/brain/brain-ollama-shim.service /etc/systemd/system/" \
+        "  sudo systemctl daemon-reload" \
+        "  sudo systemctl enable --now brain-ollama-shim.service"
   fi
   die "nothing is listening on 127.0.0.1:11435" \
       "The tunnel is not up. If the LaunchAgent is installed:" \

@@ -106,9 +106,33 @@ sudo systemctl enable --now brain-ollama-shim.service
 systemctl status brain-ollama-shim.service
 ```
 
-The unit resolves the tailnet address at startup with `tailscale ip -4` and
-binds to it, so Obsidian on the Mac reaches it directly and an IP change does
-not need a file edit.
+The unit binds **loopback only**, deliberately: the Mac running Obsidian is not
+on the tailnet, so a tailnet bind would be unreachable from the one client that
+matters. The Mac reaches it through an SSH tunnel over the USB-C link, which
+adds no new exposure - the listener stays where nothing on the LAN or tailnet
+can see it.
+
+Note that `deploy.sh` copies the unit to `/mnt/nvme/brain` but never reinstalls
+it into `/etc/systemd/system`; it only restarts whatever is already installed.
+So a stale unit there survives any number of deploys. Re-run the three lines
+above whenever the unit file itself changes, and check what the running process
+is actually bound to with `ss -ltnp | grep 11435` - a tailnet address there
+means the installed copy is stale.
+
+Then install the tunnel on the Mac (one time). Use the LaunchAgent rather than
+a hand-run `ssh -f -N`: plain ssh has no keepalive by default, so closing the
+lid leaves a forwarder that still holds port 11435 and still accepts
+connections while never answering, which Obsidian shows as a spinner that never
+resolves.
+
+```bash
+cp mac/ai.learnwithclay.jetson-tunnel.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.learnwithclay.jetson-tunnel.plist
+```
+
+It runs at login, redials every 10s while the cable is out, and logs to
+`~/Library/Logs/jetson-tunnel.err.log`. Remove it with
+`launchctl bootout gui/$(id -u)/ai.learnwithclay.jetson-tunnel`.
 
 Exact click path in Obsidian:
 
@@ -116,11 +140,12 @@ Exact click path in Obsidian:
 2. Smart Connections (or Smart Chat) in the left sidebar under Community plugins.
 3. Chat model settings, then the **Model Platform** dropdown.
 4. Pick **Ollama (Local)**.
-5. In the **Ollama host** field type the Jetson URL:
-   `http://100.x.x.x:11435` (use `http://127.0.0.1:11435` when Obsidian
-   itself runs on the Jetson). If `SHIM_TOKEN` is set, append the token as a
-   path segment: `http://100.x.x.x:11435/t/<token>`. The plugin sends no
-   headers on the chat request, so a token has to ride the URL.
+5. In the **Ollama host** field type `http://127.0.0.1:11435` - the local end
+   of the tunnel, not the Jetson's address. If `SHIM_TOKEN` is set, append the
+   token as a path segment: `http://127.0.0.1:11435/t/<token>`. The plugin
+   sends no headers on the chat request, so a token has to ride the URL. Do
+   not add a trailing slash: the plugin concatenates the endpoint onto this
+   string verbatim, with no normalisation.
 6. The **Model** dropdown now lists two entries. Pick **jetson-brain** for the
    fast tier (llama3.2:3b) or **jetson-brain-deep** for the deep tier
    (qwen2.5:7b).
@@ -128,13 +153,16 @@ Exact click path in Obsidian:
 If the dropdown says "Failed to fetch models", there are two causes and they
 produce identical text.
 
-1. The shim is unreachable. Check `systemctl status brain-ollama-shim.service`
-   on the Jetson and that the Mac is on the tailnet. Confirm directly from the
-   Mac (add `/t/<token>` before the path when `SHIM_TOKEN` is set):
+1. The shim is unreachable. Run `bash mac/brain-doctor`, which walks the whole
+   chain - USB-C link, ssh, tunnel, shim, and one real generation - and stops
+   at the first break instead of reporting all of them. It also tells a wedged
+   forwarder apart from a shim that is down or bound to the wrong address,
+   which look identical from the Mac. To confirm by hand (add `/t/<token>`
+   before the path when `SHIM_TOKEN` is set):
 
    ```bash
-   curl http://100.x.x.x:11435/api/tags
-   curl -X POST http://100.x.x.x:11435/api/show \
+   curl http://127.0.0.1:11435/api/tags
+   curl -X POST http://127.0.0.1:11435/api/show \
         -d '{"model":"jetson-brain:latest"}'
    ```
 
@@ -155,7 +183,7 @@ Shim environment variables (all optional, set them in the service unit):
 
 | Variable | Default | What it does |
 |---|---|---|
-| `SHIM_HOST` | `127.0.0.1` | Bind address (the unit overrides it with the tailnet IP) |
+| `SHIM_HOST` | `127.0.0.1` | Bind address; the unit leaves it at loopback on purpose |
 | `SHIM_PORT` | `11435` | Listen port; never use 11434 |
 | `SHIM_TOKEN` | empty | Shared secret; empty disables the check |
 | `SHIM_WEB` | `0` | `1` allows the web fallback inside Obsidian answers |
@@ -163,9 +191,12 @@ Shim environment variables (all optional, set them in the service unit):
 | `SHIM_MAX_Q` | `500` | Max question characters accepted |
 | `SHIM_MAX_BODY` | `200000` | Max request body bytes |
 | `SHIM_QUEUE_TIMEOUT` | `120` | Seconds a queued request waits for the single worker |
-| `SHIM_MAX_HISTORY_CHARS` | `4000` | Cap on replayed chat history (num_ctx is 6144) |
+| `SHIM_MAX_HISTORY_CHARS` | `4000` | Cap on replayed chat history, against `GEN_OPTIONS["num_ctx"]` |
 | `SHIM_FAST_NAME` | `jetson-brain:latest` | Name shown for the fast tier |
 | `SHIM_DEEP_NAME` | `jetson-brain-deep:latest` | Name shown for the deep tier |
+| `SHIM_STREAM_LIVE` | `1` | `0` replays the finished answer instead of streaming tokens |
+| `SHIM_HEARTBEAT` | `15` | Seconds between keepalive frames while the model is thinking |
+| `SHIM_STREAM_DEADLINE` | `600` | Hard cap on one streamed answer, in seconds |
 
 ## Optional features and their environment flags
 

@@ -43,7 +43,12 @@
         <string>-o</string><string>IdentitiesOnly=yes</string>
         <string>-o</string><string>IdentityFile=/Users/you.lawson/.ssh/id_ed25519</string>
         <string>-L</string><string>127.0.0.1:11435:127.0.0.1:11435</string>
-        <string>jetson</string>
+        <!-- jetson-usb (192.168.55.1), not jetson (the tailnet IP): this Mac has
+             no Tailscale installed, so `ssh jetson` times out here. Measured
+             2026-08-22: tailnet route times out, USB-C route connects. Swap this
+             back to `jetson` the day Tailscale lands on the Mac and the tunnel
+             stops needing the cable. -->
+        <string>jetson-usb</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -53,9 +58,9 @@
     <true/>
 
     <!-- launchd's own floor is 10s anyway; stated so the retry cadence is
-         visible rather than implicit. When Tailscale is down or you are on a
-         captive portal, ssh fails in ~10s and this retries every 10s until the
-         network comes back. That is the intended self-healing behaviour, and
+         visible rather than implicit. When the USB-C cable is unplugged or the
+         Jetson is rebooting, ssh fails in ~10s and this retries every 10s until
+         the link comes back. That is the intended self-healing behaviour, and
          it is also why the log below can grow while you are offline. -->
     <key>ThrottleInterval</key>
     <integer>10</integer>
