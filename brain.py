@@ -2496,6 +2496,71 @@ def gather_web_context(query):
 # ---------------------------------------------------------------------------
 # Prompt construction.
 # ---------------------------------------------------------------------------
+# One shared voice rule, appended to every answer-producing system prompt.
+#
+# Two separate defects motivated it. First, the model narrated its own plumbing
+# ("Moreover, the snippets highlight...") instead of writing about the subject.
+# That is vocabulary priming, not disobedience: the grounding contract below
+# says "snippets" eight times and a 3B echoes the nouns it was fed, and nothing
+# in the prompt had ever told it not to. Second, the stock connective openers
+# and the wider AI-tell set (rule-of-three padding, "it is important to note",
+# "not just X, but Y").
+#
+# Deliberately terse: prompt LENGTH is a known hazard here (a ~700 word filler
+# prompt measurably broke the grounding contract). It constrains surface FORM
+# only and says nothing about what may be asserted, so every contract it is
+# appended to is untouched. "cite its source" rather than "cite the filename"
+# so the one string is correct for both the filename-citing vault prompts and
+# the URL-citing web prompts.
+#
+# WHAT THIS RULE IS AND IS NOT, measured. Three arms over gold_questions
+# (28 q, BRAIN_SEED=1234, BRAIN_TEMPERATURE=0, identical index, prompt the only
+# variable). A = no rule. B = an 84-word enumerated banned-list. C = this rule.
+#
+#   category               A    B    C
+#   "the snippets"        11    1    0
+#   meta-reference (all)  12    3    1
+#   stock openers         17   18   14
+#   "not just X, but Y"    0    6    5
+#   total tells           30   28   20
+#
+# What the meta clause buys is the whole point and it is solid: the tell that
+# prompted this work is gone. It works because the contract above already says
+# "snippets" eight times AND this rule hands the model a substitute behaviour
+# ("state the fact and cite its source"). A bare ban with nothing to do instead
+# measurably does less.
+#
+# Do NOT re-add an enumerated list of forbidden connectives or stock phrases.
+# Arm B tried exactly that and moved openers 17 -> 18, i.e. nothing, while
+# costing 36 words on a prompt whose length is itself a known hazard. Padding
+# tells ("delve", "rich tapestry", "serves as a testament") were 0 in ALL THREE
+# arms -- this model never emits them, so banning them was pure length for zero
+# benefit. The opener line is positive-framed because enumeration demonstrably
+# did not work, not because it is known to work better.
+#
+# HONEST UNKNOWN, do not "fix" this by re-reading arm B. "not just X, but Y"
+# went 0 -> 6 when the rule was added, and it was tempting to conclude that
+# naming a rhetorical shape teaches it. Arm C REMOVED that ban entirely and
+# still produced 5. So the ban is not the cause. All that is established is
+# that the shape tracks the PRESENCE of a voice rule, in either form, and is
+# absent without one. One untested hypothesis is that this rule's own
+# contrastive framing ("write about the subject, never about the retrieval") is
+# being mirrored structurally. With n=1 run per arm a specific clause cannot be
+# separated from a general prompt-perturbation effect. Testing it means
+# rewording the opening clause non-contrastively and re-running the battery.
+#
+# Guardrails held across all three arms: 0 refusals, 28/28 served_by=rag, mean
+# answer length 265 -> 272 -> 287 words, judged mean 89.0 -> 87.8 -> 91.8 (3B
+# self-judge, meaningful only as a relative reference across arms that share
+# it). The grounding contract is not disturbed by any of this.
+PLAIN_VOICE = (
+    "\nVoice: write about the subject, never about the retrieval. Do not write "
+    "'the snippets', 'the provided sources', 'the context', or 'the excerpts'; "
+    "state the fact and cite its source. Begin each sentence with what it is "
+    "about rather than a linking adverb. Plain declarative prose, varied "
+    "sentence length."
+)
+
 # Slim routing prompt for Phase 2 (Q1). It does NOT reference vault snippets,
 # because the routing call never receives them: Phase 1 already judged the
 # vault insufficient. It only needs the question and any reference URLs to
@@ -2519,12 +2584,14 @@ WEB_SYSTEM = (
     "You are a careful research assistant. You are given excerpts fetched from "
     "the web, each labeled with its source URL, plus the user's question. "
     "Answer the question using these excerpts and cite the URLs you relied on."
+    + PLAIN_VOICE
 )
 
 DOC_SYSTEM = (
     "You are a careful research assistant. You are given the readable text of a "
     "single reference page fetched from a URL, plus the user's question. Answer "
     "the question from this fetched reference and cite the URL you relied on."
+    + PLAIN_VOICE
 )
 
 NO_WEB_SYSTEM = (
@@ -2534,6 +2601,7 @@ NO_WEB_SYSTEM = (
     "scholars, articles, and terms that appear in the snippets. Cite vault "
     "sources by filename when you use them, aim for about 5 to 8 sentences, "
     "and note plainly if you are unsure."
+    + PLAIN_VOICE
 )
 
 # Phase 1: the vault is ALWAYS consulted for an answer first. The model may only
@@ -2557,8 +2625,18 @@ VAULT_FIRST_SYSTEM = (
     "snippets DO support and say plainly that the specific detail is not in "
     "the vault. "
     "Answer thoroughly: cover every relevant point the snippets support. "
-    "Aim for a clear, well organized answer of about 5 to 8 sentences. "
-    "Use only the provided context.\n"
+    "Aim for a clear, well organized answer of about 5 to 8 sentences.\n"
+    # "Use only the provided context." used to close this line. Dropped: it is a
+    # weaker restatement of the "USING ONLY the vault snippets provided" line
+    # eight lines above, and PLAIN_VOICE below costs length that had to come
+    # from somewhere. The hard contract is unchanged.
+    #
+    # PLAIN_VOICE sits HERE, not at the end. The attribution requirement below
+    # it is a positive content demand and needs the final slot (see its comment
+    # for the judged failure taxonomy that put it there). A voice rule is a
+    # negative constraint on surface form, which a small model applies far more
+    # reliably from mid-prompt than a "remember to name the scholar" would.
+    + PLAIN_VOICE + "\n"
     # The attribution requirement used to live mid-paragraph, phrased as "name
     # the specific scholars, articles, terms and definitions ... whenever the
     # snippets provide them", and the 3B ignored it. The judged failure
@@ -2626,6 +2704,10 @@ PARENT_SYSTEM = (
     "source filenames. Aim for a clear, warm answer of about 7 to 12 "
     "sentences, and use short paragraphs or a short list when that is easier "
     "for a stressed parent to follow. Use only the provided context."
+    # Warm register and plain prose are not in tension: the banned items here
+    # are padding and machine-narration, both of which read as cold to a parent.
+    # Nothing in PLAIN_VOICE bans the short list this prompt just asked for.
+    + PLAIN_VOICE
 )
 
 
