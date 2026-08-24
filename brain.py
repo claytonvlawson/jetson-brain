@@ -2631,6 +2631,24 @@ def gather_web_context(query):
 # separated from a general prompt-perturbation effect. Testing it means
 # rewording the opening clause non-contrastively and re-running the battery.
 #
+# FAQ DEGENERATION, why the opener clause is gone. Arm C carried one more
+# sentence: "Begin each sentence with what it is about rather than a linking
+# adverb." On 5 of 28 answers the 3B read that as "emit topic headings" and
+# restructured the answer into a self-asked FAQ -- question marks in the body
+# went 1 -> 1 -> 37 (language_deprivation_1, asl_full_language_1, deaf_gain_1,
+# maryland_school_deaf_1, deaf_identity_audism_1). maryland_school_deaf_1 spends
+# 534 words answering "What are the potential benefits...?" and never engages
+# the parent's actual worry. That is worse than the tell this rule exists to fix.
+#
+# Every metric missed it: tells fell, length ROSE (which read as improvement),
+# refusals stayed 0, the judge scored it highest of the three arms. It was found
+# by counting '?' in the answer bodies, which nothing in the harness did.
+#
+# The clause bought nothing measurable anyway (openers was the null result
+# above), so it is removed rather than reworded. NOT yet re-measured: the
+# remaining rule is arm C minus that sentence, and no battery has run on it.
+# Anyone re-running should count '?' per answer alongside the tell counts.
+#
 # Guardrails held across all three arms: 0 refusals, 28/28 served_by=rag, mean
 # answer length 265 -> 272 -> 287 words, judged mean 89.0 -> 87.8 -> 91.8 (3B
 # self-judge, meaningful only as a relative reference across arms that share
@@ -2638,8 +2656,7 @@ def gather_web_context(query):
 PLAIN_VOICE = (
     "\nVoice: write about the subject, never about the retrieval. Do not write "
     "'the snippets', 'the provided sources', 'the context', or 'the excerpts'; "
-    "state the fact and cite its source. Begin each sentence with what it is "
-    "about rather than a linking adverb. Plain declarative prose, varied "
+    "state the fact and cite its source. Plain declarative prose, varied "
     "sentence length."
 )
 
