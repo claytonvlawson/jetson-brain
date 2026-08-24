@@ -238,7 +238,12 @@ CONTRACT_CLAUSES = (
     "reply with EXACTLY the single word INSUFFICIENT",
     "Cite the sources by filename when you use them.",
     "Do not guess, do not use outside knowledge",
-    "Use only the provided context.",
+    # Was "Use only the provided context." until brain.py dropped it as a weaker
+    # restatement of the clause below (see the PLAIN_VOICE comment: the voice rule
+    # needed the words back). The contract this block exists to guard is
+    # unchanged, so it now asserts the surviving, stronger form of the same
+    # requirement -- which both VAULT_FIRST_SYSTEM and PARENT_SYSTEM carry.
+    "USING ONLY the vault snippets provided",
 )
 for base_name, base in (("vault", brain.VAULT_FIRST_SYSTEM),
                         ("parent", brain.PARENT_SYSTEM)):

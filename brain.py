@@ -2580,12 +2580,28 @@ def gather_web_context(query):
 # (28 q, BRAIN_SEED=1234, BRAIN_TEMPERATURE=0, identical index, prompt the only
 # variable). A = no rule. B = an 84-word enumerated banned-list. C = this rule.
 #
-#   category               A    B    C
-#   "the snippets"        11    1    0
-#   meta-reference (all)  12    3    1
-#   stock openers         17   18   14
-#   "not just X, but Y"    0    6    5
-#   total tells           30   28   20
+#   category                  A    B    C
+#   bare "snippet(s)"        22    2    1     <- the reported bug
+#     (answers affected)      6    2    1
+#   stock openers            17   18   14     <- see NULL RESULT below
+#   "not just X, but Y"       0    6    5
+#
+# Two corrections to the first version of this table, both found by re-deriving
+# it rather than trusting the original count:
+#
+#   * It said 11/1/0 using /\bthe snippets?\b/. That regex misses the canonical
+#     form of the bug ("The Deaf Epistemology snippet supports...", "the vault
+#     snippets", "based on the provided snippets"). Bare /\bsnippets?\b/ gives
+#     22/2/1. The win is BIGGER than first reported, but arm C is 1, NOT 0:
+#     bilingual_bimodal_1 still says "generated based on the provided snippets".
+#     Arm B was therefore near-parity with C on this axis; B was rejected for its
+#     84-word length, not for failing to move the tell.
+#
+#   * "identical index, prompt the only variable" was FALSE for arm A. Arm A ran
+#     before a deploy that rsynced the vault; its retrieved sources differ from
+#     B/C on 15 of 28 questions. B vs C is byte-identical on 28/28. The clean
+#     comparison is the 13 questions where A and C retrieved the same sources,
+#     and there the result is unambiguous: 10 -> 0.
 #
 # What the meta clause buys is the whole point and it is solid: the tell that
 # prompted this work is gone. It works because the contract above already says
@@ -2593,9 +2609,12 @@ def gather_web_context(query):
 # ("state the fact and cite its source"). A bare ban with nothing to do instead
 # measurably does less.
 #
-# Do NOT re-add an enumerated list of forbidden connectives or stock phrases.
-# Arm B tried exactly that and moved openers 17 -> 18, i.e. nothing, while
-# costing 36 words on a prompt whose length is itself a known hazard. Padding
+# NULL RESULT, not a proven no-effect: openers 17 -> 18 -> 14 is underpowered.
+# Sign-flip p=0.70 on a single run per arm. Do not cite it as evidence that
+# enumeration cannot work; it is evidence that this experiment could not tell.
+# The reason not to re-add an enumerated list is cost, not disproof: it spent 36
+# words on a prompt whose length is itself a known hazard and bought nothing
+# measurable. Padding
 # tells ("delve", "rich tapestry", "serves as a testament") were 0 in ALL THREE
 # arms -- this model never emits them, so banning them was pure length for zero
 # benefit. The opener line is positive-framed because enumeration demonstrably
