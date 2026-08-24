@@ -79,6 +79,7 @@ brain.web_search = fake_web_search
 brain.fetch_page = fake_fetch_page
 brain.persist_web_fetch = None  # skip the disk-write side effect for this test
 brain.WEB_SEMANTIC_ENABLED = False
+brain.WEB_RELEVANCE_FLOOR_ENABLED = False  # isolate this test from the floor
 fetch_calls.clear()
 excerpts = brain.gather_web_context("q")
 check("gather_web_context (disabled) returns MAX_WEB_FETCH excerpts",
@@ -105,6 +106,61 @@ check("gather_web_context (enabled) still caps output at MAX_WEB_FETCH",
 check("gather_web_context (enabled) ranks the semantically closest excerpt first",
       excerpts[0][0] == "url3")
 brain.WEB_SEMANTIC_ENABLED = False  # restore default for any test run after this one
+brain.WEB_RELEVANCE_FLOOR_ENABLED = True  # restore default for the cases below
+
+# ---- WEB_RELEVANCE_FLOOR: drops a keyword-coincidental, topically-wrong page,
+# even with WEB_SEMANTIC_ENABLED off (the actual production default) ----------
+def fake_web_search_strongsville(query):
+    return [
+        # Shares "deaf" + "ohio" with the query but is not about deaf PEOPLE
+        # IN Strongsville -- a caregiver job posting, same shape as the bug.
+        {"href": "url_job", "body": ""},
+        # Actually on-topic: mentions deaf, people, and the city.
+        {"href": "url_ontopic", "body": ""},
+    ]
+def fake_fetch_page_strongsville(url):
+    if url == "url_job":
+        return ("Now hiring caregivers in Ohio. Experience with deaf "
+                 "clients preferred. Apply today for this Ohio position.")
+    return ("There is a small Deaf community in Strongsville, Ohio; "
+            "several deaf people attend the local deaf meetup.")
+brain.web_search = fake_web_search_strongsville
+brain.fetch_page = fake_fetch_page_strongsville
+brain.persist_web_fetch = None
+brain.WEB_SEMANTIC_ENABLED = False
+brain.WEB_RELEVANCE_FLOOR_ENABLED = True
+excerpts = brain.gather_web_context("are there deaf people in Strongsville Ohio")
+hrefs = [h for h, _ in excerpts]
+check("relevance floor drops the keyword-coincidental caregiver posting",
+      "url_job" not in hrefs)
+check("relevance floor keeps the excerpt that actually covers the query",
+      "url_ontopic" in hrefs)
+
+# ---- WEB_RELEVANCE_FLOOR: an all-irrelevant result set returns [] cleanly,
+# not the least-bad candidate (the exact shape of the reported bug) ----------
+def fake_web_search_all_bad(query):
+    return [{"href": "url_bad1", "body": ""}, {"href": "url_bad2", "body": ""}]
+def fake_fetch_page_all_bad(url):
+    return "Unrelated caregiving job posting with no query terms in it at all."
+brain.web_search = fake_web_search_all_bad
+brain.fetch_page = fake_fetch_page_all_bad
+excerpts = brain.gather_web_context("are there deaf people in Strongsville Ohio")
+check("relevance floor empties the result set when nothing clears it "
+      "(caller already falls back to vault-only on empty excerpts)",
+      excerpts == [])
+
+# ---- WEB_RELEVANCE_FLOOR: does not block a genuinely on-topic result --------
+def fake_web_search_good(query):
+    return [{"href": "url_good", "body": ""}]
+def fake_fetch_page_good(url):
+    return "Deaf people in Strongsville, Ohio can find community at..."
+brain.web_search = fake_web_search_good
+brain.fetch_page = fake_fetch_page_good
+excerpts = brain.gather_web_context("are there deaf people in Strongsville Ohio")
+check("relevance floor keeps a genuinely on-topic single result",
+      len(excerpts) == 1 and excerpts[0][0] == "url_good")
+
+brain.WEB_RELEVANCE_FLOOR_ENABLED = True  # restore default for any test run after this
 
 print()
 print("RESULT:", "ALL PASS" if not FAILS else ("FAILURES: " + ", ".join(FAILS)))

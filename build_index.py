@@ -822,7 +822,13 @@ def extract_urls(text):
 # reproduction contributes roughly two chunks of arbitrary slice while its
 # duplicated text still inflates the BM25 document frequencies that the focused
 # child notes are scored against. Indexing it can only dilute them.
-_JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv", "Templates", "_Fulltext"}
+#
+# "_PendingReview" holds web_review_digest.py's rolling checklist of pages
+# awaiting approval (see that file). It is a to-do list, not source content,
+# and it is regenerated wholesale on every run, so indexing it would chunk
+# stale review-status prose into BM25 on a schedule.
+_JUNK_DIR_NAMES = {"node_modules", "site-packages", ".venv", "Templates",
+                   "_Fulltext", "_PendingReview"}
 
 
 def existing_dense_model(out):

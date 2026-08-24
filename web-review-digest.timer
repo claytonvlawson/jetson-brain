@@ -1,0 +1,17 @@
+# jetson-brain: run the web-review digest daily, 06:30. Offset from
+# brain-learn.timer (Sun 03:30) and research-agent.timer (Mon 04:00) so none
+# of the three ever contend for the index lock; this job doesn't touch the
+# index at all (it only reads the queue and writes one note), so contention
+# risk is low regardless, but the offset keeps the schedule easy to reason
+# about. Persistent=true catches up after a powered-off day. See
+# web-review-digest.service for install commands.
+[Unit]
+Description=jetson-brain daily web-review digest timer
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

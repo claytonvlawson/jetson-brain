@@ -1,0 +1,21 @@
+# jetson-brain: mirror the web-fetch review queue into an Obsidian note so
+# pending pages are visible without SSH. Approval still happens through
+# web_review.py (--promote/--reject); this unit only regenerates the digest.
+#
+# Install on the Jetson (sudo needs the password there):
+#   sudo cp /mnt/nvme/brain/web-review-digest.service /etc/systemd/system/
+#   sudo cp /mnt/nvme/brain/web-review-digest.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now web-review-digest.timer
+# Check:
+#   systemctl list-timers web-review-digest.timer
+#   journalctl -u web-review-digest.service -n 50
+[Unit]
+Description=jetson-brain daily web-review digest
+
+[Service]
+Type=oneshot
+User=snowbeach
+WorkingDirectory=/mnt/nvme/brain
+ExecStart=/usr/bin/python3 /mnt/nvme/brain/web_review_digest.py
+Nice=10

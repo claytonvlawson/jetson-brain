@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py brain_input.py brain_transcript.py answer_cache.py web_cache.py web_paths.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py score_depth.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl depth_gold.jsonl depth_retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-gc.sh brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py review_qa.py web_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py brain_skills.py brain_depth.py brain_ollama_shim.py brain-ollama-shim.service escalate.py test_brain_depth.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py test_obsidian_blocks.py test_brain_skills.py test_brain_skills_connections.py test_ollama_shim.py test_hyde.py test_ctx_fit.py test_embed_prefix.py test_brain_input.py test_brain_transcript.py test_web_review.py; do
+for f in brain.py brain_ui.py brain_input.py brain_transcript.py answer_cache.py web_cache.py web_paths.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py score_depth.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl depth_gold.jsonl depth_retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brain_web.py brain-web.sh brain-web.service brain-gc.sh brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py review_qa.py web_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py brain_skills.py brain_depth.py brain_ollama_shim.py brain-ollama-shim.service escalate.py web_review_digest.py web-review-digest.service web-review-digest.timer test_brain_depth.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py test_obsidian_blocks.py test_brain_skills.py test_brain_skills_connections.py test_ollama_shim.py test_hyde.py test_ctx_fit.py test_embed_prefix.py test_brain_input.py test_brain_transcript.py test_web_review.py test_web_review_digest.py test_plain_voice.py; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -147,6 +147,11 @@ echo "==> Syncing vault markdown (md only) to ${REMOTE}/vault/ ..."
 # --delete from destroying them and keeps the Mac copy (research-pull.sh)
 # from round-tripping back.
 #
+# _PendingReview is the same story: web_review_digest.py regenerates it on
+# the device from the live queue, the Mac vault never has it, and without
+# this exclude the next --delete rsync would wipe it right after a timer run
+# writes it.
+#
 # _Advisor/ is listed for the same reason, but it is PREVENTIVE, not a repair:
 # no _Advisor directory exists on either side today, so this line has zero
 # effect right now and nothing was ever lost. Same caveat as Templates/ below:
@@ -166,6 +171,7 @@ rsync -az --delete --prune-empty-dirs \
   --exclude='_WebCache/' \
   --exclude='_Research/' \
   --exclude='_Advisor/' \
+  --exclude='_PendingReview/' \
   --exclude='Templates/' \
   --include='*/' --include='*.md' --exclude='*' \
   "${VAULT_SRC}/" "${JETSON}:${REMOTE}/vault/"
@@ -256,6 +262,9 @@ scp -q \
   "${HERE}/brain_ollama_shim.py" \
   "${HERE}/brain-ollama-shim.service" \
   "${HERE}/escalate.py" \
+  "${HERE}/web_review_digest.py" \
+  "${HERE}/web-review-digest.service" \
+  "${HERE}/web-review-digest.timer" \
   "${HERE}/test_hybrid.py" \
   "${HERE}/test_is_insufficient.py" \
   "${HERE}/test_intent.py" \
@@ -275,6 +284,8 @@ scp -q \
   "${HERE}/test_ctx_fit.py" \
   "${HERE}/test_embed_prefix.py" \
   "${HERE}/test_web_review.py" \
+  "${HERE}/test_web_review_digest.py" \
+  "${HERE}/test_plain_voice.py" \
   "${JETSON}:${REMOTE}/"
 
 # obsidian_vectors.json is a generated artifact (see the step above), not

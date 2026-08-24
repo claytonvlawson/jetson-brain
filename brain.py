@@ -773,6 +773,19 @@ PAGE_CHAR_CAP = 2000
 # discipline for retrieval changes (see BRAIN_ANN, cross-encoder rerank notes).
 WEB_SEMANTIC_ENABLED = os.environ.get("BRAIN_WEB_SEMANTIC", "0") not in (
     "0", "false", "False", "no")
+
+# Fraction of the query's distinct content words (after tokenize()+stopword
+# filtering, the same pipeline BM25 uses) that must literally appear in an
+# excerpt before it's allowed into the prompt. This is the ONE relevance gate
+# that runs on the default production path (WEB_SEMANTIC_ENABLED is OFF by
+# default) -- DDG's return order is a keyword match on the query, not a
+# semantic check of whether the page answers it. Pure token-set arithmetic:
+# no embedding call, no network, effectively free next to the page fetch it
+# gates. Defaults ON (unlike WEB_SEMANTIC_ENABLED/cross-encoder rerank, which
+# are speculative and shipped OFF pending an A/B) because this closes a
+# verified bug at no cost.
+WEB_RELEVANCE_MIN_FRACTION = 0.6
+WEB_RELEVANCE_FLOOR_ENABLED = _env_flag("BRAIN_WEB_RELEVANCE_FLOOR", "1")
 HISTORY_TURNS = 6  # keep the last N user+assistant exchanges
 
 # Phase-1 grounding calls carry only the last 2 exchanges (4 messages). The
@@ -1023,7 +1036,40 @@ WEB_MAX_PER_SOURCE = _env_int("BRAIN_WEB_MAX_PER_SOURCE", 2)
 # was already correct) out, and by 8.0 it evicts legal_recognition_1 too, back
 # to where it started. 2.0 sits in the middle of the safe band rather than at
 # its edge, so ordinary index churn cannot walk it into the lossy region.
-DEFAULT_ANALYTIC_BOOST = 2.0
+#
+# ROLLED BACK TO 0.0 on 2026-08-23. The table above is V4 and is now STALE: it
+# does not describe the index this ships against. Re-measured on the live index
+# (bm25.pkl sha256 2210ea7b, 2673 chunks, dense nomic-embed-text, rebuilt that
+# morning by brain-learn.timer), 4 seeded runs per arm, index hash verified
+# identical before and after every run:
+#
+#   boost   in_context (4 runs)     mean    MRR mean
+#   0.0     32, 32, 32, 32          32.00   0.5444
+#   2.0     30, 31, 31, 31          30.75   0.5425
+#
+# Per question, over 4 runs each arm:
+#   cochlear_implant_myth_2   4/4 in-context at 0.0 -> 0/4 at 2.0   LOST
+#   gallaudet_2               4/4 in-context at 0.0 -> 0/4 at 2.0   LOST
+#   deaf_community_transmission_1  0/4 at 0.0 -> 3/4 at 2.0         flaky gain
+#
+# Two deterministic losses against one unreliable gain. The mechanism is the
+# one the paragraph above predicted would stay safely out of reach: a boosted
+# reference chunk displaces the EXPECTED chunk inside keep_k. On
+# cochlear_implant_myth_2 the +2.0 lifts Sources/Language Deprivation/
+# Delcenserie 2024 into slot 7 and pushes Core/Bilingual Bimodal Protective
+# Factors out; gallaudet_2's Organizations/Gallaudet University.md falls from
+# rank 5 to 15. gallaudet_2 is the exact canary the V4 sweep named as the 5.0
+# failure. Ordinary index churn DID walk 2.0 into the lossy region, so the
+# "middle of the safe band" argument above is falsified, not merely outdated.
+#
+# Also measured, and worth keeping: this harness is NOT byte-reproducible under
+# a pinned seed. Two identical 0.0 runs moved 8 of 40 questions by 1 to 5 rank
+# positions. in_context never moved (32 in all four runs), so in_context is the
+# trustworthy metric here and MRR (+/-0.004) and recall@k (+/-1) are not. Any
+# future sweep on this file should replicate and read in_context, not MRR.
+#
+# Do not re-raise this without re-running the sweep against the CURRENT index.
+DEFAULT_ANALYTIC_BOOST = 0.0
 try:
     DEFAULT_ANALYTIC_BOOST = float(os.environ["BRAIN_ANALYTIC_BOOST"])
 except (KeyError, ValueError):
@@ -2351,6 +2397,19 @@ def _spawn_index_update():
         pass
 
 
+def _excerpt_clears_relevance_floor(qwords, text):
+    """True if `text` contains at least WEB_RELEVANCE_MIN_FRACTION of the
+    query's distinct content words (qwords, pre-tokenized once per query by
+    the caller -- re-tokenizing the query here would be wasted work on every
+    candidate)."""
+    if not qwords:
+        return True
+    twords = set(tokenize(text[:PAGE_CHAR_CAP]))  # same slice the prompt sees
+    overlap = len(qwords & twords)
+    required = -(-len(qwords) * 6 // 10)  # ceil(0.6 * n) via integer division
+    return overlap >= max(1, required)
+
+
 def _rank_excerpts_by_relevance(query, candidates):
     """Reorder (url, text) candidates by query<->excerpt cosine using the same
     nomic-embed-text pipeline as _rerank_by_embedding. Returns candidates
@@ -2478,6 +2537,10 @@ def gather_web_context(query):
                 statuses[href] = "snippet"
         if text:
             candidates.append((href, text))
+    if WEB_RELEVANCE_FLOOR_ENABLED and candidates:
+        qwords = set(query_tokens(query))
+        candidates = [(h, t) for h, t in candidates
+                      if _excerpt_clears_relevance_floor(qwords, t)]
     if WEB_SEMANTIC_ENABLED:
         candidates = _rank_excerpts_by_relevance(query, candidates)
     kept = candidates[:MAX_WEB_FETCH]

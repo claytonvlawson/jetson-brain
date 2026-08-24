@@ -238,6 +238,22 @@ def _note_transport_error(exc):
         TRANSPORT_ERRORS["first"] = str(exc)
 
 
+def _backoff(attempt):
+    """Pause before retrying a TRANSPORT failure. Linear, tiny, uncapped-free.
+
+    Only the transport path calls this. A reply that arrived but did not parse
+    means Ollama is alive and sampling badly, and retrying that instantly is
+    correct -- the point is to reroll the sampler, not to wait. A transport
+    failure is the opposite: Ollama is down, still loading a model, or being
+    OOM-killed mid-generation, and the old tight loop spent all its retries
+    inside the few hundred milliseconds when it was least able to answer. On an
+    8 GB board the common case is the judge model being swapped in behind a
+    pinned answerer, which takes seconds, not microseconds. 0.5s then 1.0s
+    costs a well-behaved run nothing (it never enters this path) and gives a
+    struggling one a real chance to come back."""
+    time.sleep(0.5 * (attempt + 1))
+
+
 class JudgeTransportError(Exception):
     """The judge could not be reached or did not return parseable transport
     payload. Distinct from a judge that answered with a bad verdict: this one
@@ -304,10 +320,31 @@ def _extract_json(text):
     start = text.find("{")
     if start < 0:
         return None
+    # Brace counting must IGNORE braces inside string literals. A judge grading
+    # a fact or an answer that itself contains a brace -- vault notes quote code
+    # and JSON, and the must_cover text is pasted verbatim into the prompt --
+    # would otherwise desync the depth counter: an unmatched "{" in a string
+    # makes the scan run off the end and return None, and an unmatched "}"
+    # closes the object early and slices invalid JSON. Both look identical to a
+    # judge that simply failed, so the retry loop burns its attempts and the
+    # fact defaults to NOT present. That silently costs points on exactly the
+    # answers that quote source material.
     depth = 0
+    in_string = False
+    escaped = False
     for i in range(start, len(text)):
         ch = text[i]
-        if ch == "{":
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
             depth += 1
         elif ch == "}":
             depth -= 1
@@ -331,6 +368,7 @@ def _judge_once(prompt, judge_model, host, retries, timeout):
             content = _ollama_chat(judge_model, messages, host, True, timeout)
         except JudgeTransportError as e:
             _note_transport_error(e)
+            _backoff(_attempt)
             continue
         obj = _extract_json(content)
         if not isinstance(obj, dict):
@@ -403,6 +441,7 @@ def _iso_bool(template, key, filler, judge_model, host, retries, timeout, defaul
             content = _ollama_chat(judge_model, messages, host, True, timeout)
         except JudgeTransportError as e:
             _note_transport_error(e)
+            _backoff(_attempt)
             continue
         obj = _extract_json(content)
         if isinstance(obj, dict) and key in obj:
@@ -516,6 +555,13 @@ def report_gaps(results, the_brain):
         chunks = getattr(the_brain, "chunks", None) or []
         # Distinctive terms only: a fact's rare words decide whether it is in
         # the corpus. Scoring on common words would report every fact covered.
+        #
+        # Recomputed per run on purpose. This full-corpus pass looks like the
+        # expensive part of the harness and is not: at the vault's ~2666 chunks
+        # it measures 23 ms, against a battery that spends minutes in the judge.
+        # A disk cache keyed on the index mtime was built and thrown away -- it
+        # saved ~19 ms, cost 60 lines and a staleness surface, and read SLOWER
+        # than recomputing on a cold page cache. Do not add it again.
         doc_freq = {}
         tokenized = []
         for c in chunks:
@@ -618,21 +664,43 @@ def load_answers(path):
 
 
 def preflight_judge(judge_model, host, timeout):
-    """Confirm the judge model answers at all. Returns True/False.
+    """Confirm the judge model answers, IN THE MODE THE RUN WILL USE. True/False.
 
     Prints the transport reason on failure. The old version could only say
     "no reply", so a missing model, a stopped Ollama and a timeout all looked
-    the same at the one moment the run could still be fixed cheaply."""
+    the same at the one moment the run could still be fixed cheaply.
+
+    want_json=True is the load-bearing part. Every real judge call -- both
+    _judge_once and _iso_bool -- posts format:"json", and that is a different
+    code path in Ollama than a plain completion: it constrains sampling to a
+    JSON grammar and it is the part that fails on an old server, a model with
+    no grammar support, or a bad template. Preflighting with want_json=False
+    proved only that the model talks, so a judge that answers prose fine and
+    chokes on format:json sailed past this gate and then failed every one of
+    the ~165 real calls, each defaulting its fact to NOT present -- the exact
+    clean-looking 0/28 that ISO_CALLS exists to catch AFTER the fact. Checking
+    the JSON path here catches it before the battery spends a minute."""
     try:
         reply = _ollama_chat(
             judge_model,
-            [{"role": "user", "content": "Reply with the single word: ready"}],
-            host, False, timeout,
+            [{"role": "user", "content":
+              'Reply with ONLY this JSON: {"ready": true}'}],
+            host, True, timeout,
         )
     except JudgeTransportError as e:
         sys.stderr.write("judge preflight failed: %s\n" % e)
         return False
-    return bool(reply and reply.strip())
+    # Parse, do not just check for bytes: the point is to prove the grammar
+    # path returns something a verdict could be read out of.
+    if not (reply and reply.strip()):
+        sys.stderr.write("judge preflight failed: empty reply in JSON mode\n")
+        return False
+    if _extract_json(reply) is None:
+        sys.stderr.write(
+            "judge preflight failed: format:json returned unparseable text: "
+            "%.200r\n" % reply)
+        return False
+    return True
 
 
 # -- reporting ----------------------------------------------------------------
@@ -861,17 +929,149 @@ def env_fingerprint(args):
         # measuring different retrievers -- the exact mislabelling this
         # fingerprint exists to prevent. eval_retrieval.py already recorded it.
         "BRAIN_RERANK": flag(getattr(brain, "_RERANK_ENABLED", False)),
+        # Corpus SCOPE for the dense ranker, and NON-INDEXED: the predicate at
+        # _default_dense_predicate reads chunk['source'] at query time, so one
+        # index file can reach a different subtree on every run and the "index"
+        # key above cannot stand in for it. Both are enforced on all three dense
+        # paths (ANN post-filter, exact scan, python fallback) and _hyde_scores
+        # inherits them, so a pruned prefix can never enter the RRF pool at all.
+        # str, never flag: ("Dream/ThesisVault",) and ("queue/_WebCache",) both
+        # render "1" and the artifact loses WHICH subtree it was scored on. An
+        # unset var resolves to (), which is not None, so resolved() records
+        # "()" rather than falling through to the environ.
+        "BRAIN_DENSE_INCLUDE": resolved(
+            "DENSE_INCLUDE", "BRAIN_DENSE_INCLUDE", str),
+        "BRAIN_DENSE_EXCLUDE": resolved(
+            "DENSE_EXCLUDE", "BRAIN_DENSE_EXCLUDE", str),
         # Pins _build_ivf's k-means, so it CAN move retrieval whenever
         # BRAIN_ANN=1, and was previously unrecorded on this side.
         "BRAIN_ANN_SEED": str(getattr(brain, "ANN_SEED", "")),
         "BRAIN_HYDE": flag(brain.HYDE_ENABLED),
+        # The token budget for the hypothetical answer HyDE writes and then
+        # EMBEDS as a third probe, so it moves the probe vector, the HyDE
+        # ranking and the fused order -- it is not a length knob. The
+        # num_predict recorded in the generation block below is GEN_OPTIONS'
+        # answer budget; hyde_hypothesis overrides that key on a local copy, so
+        # the module value never changes and that key cannot cover this one.
+        # Without it a 16-token probe and a 512-token probe are byte-identical.
+        "BRAIN_HYDE_NUM_PREDICT": resolved(
+            "HYDE_NUM_PREDICT", "BRAIN_HYDE_NUM_PREDICT", str),
         "BRAIN_DECOMPOSE": flag(brain.DECOMPOSE_ENABLED),
         "BRAIN_TOP_K_FAST": str(brain.TOP_K_FAST),
+        # The rest of the keep_k family. BRAIN_TOP_K_FAST above is only the
+        # branch a default-persona fast-model run lands on; the elif chain in
+        # retrieve_context picks a DIFFERENT constant for the deep model, for
+        # each persona and for multi-intent questions, and none of them were
+        # recorded. Two runs that pasted 8 and 14 chunks into the prompt emitted
+        # identical headers.
+        # Deep first, because the DEEP_MODEL test precedes the persona tests: on
+        # a --model qwen2.5:7b arm this OVERRIDES parent/scholar/multi entirely.
+        "BRAIN_TOP_K_DEEP": resolved("TOP_K_DEEP", "BRAIN_TOP_K_DEEP", str),
+        # Parent depth and parent per-source cap. The scholar twins are already
+        # recorded below; the parent ones were not, so a parent run at cap 3 and
+        # one at cap 2 fingerprinted the same -- and brain.py's own comment
+        # measures exactly that difference as national_orgs 100 -> 50.
+        "BRAIN_PARENT_TOP_K": resolved(
+            "PARENT_TOP_K", "BRAIN_PARENT_TOP_K", str),
+        "BRAIN_PARENT_MAX_PER_SOURCE": resolved(
+            "PARENT_MAX_PER_SOURCE", "BRAIN_PARENT_MAX_PER_SOURCE", str),
+        # Multi-hop arms, and they bind on a plain default-persona run: there is
+        # no flag gate, classify_intent promotes any two-entity question to
+        # "multi" and multihop_gold.jsonl is exactly that shape. The cap is what
+        # decides whether the second entity gets slots at all. At stock defaults
+        # MULTI_TOP_K equals TOP_K_FAST, so the width key looks redundant right
+        # up until either is set, which is the arm it exists to separate.
+        "BRAIN_MULTI_TOP_K": resolved("MULTI_TOP_K", "BRAIN_MULTI_TOP_K", str),
+        "BRAIN_MULTI_MAX_PER_SOURCE": resolved(
+            "MULTI_MAX_PER_SOURCE", "BRAIN_MULTI_MAX_PER_SOURCE", str),
+        # The default persona's per-source cap, and the only clause that lets a
+        # default-persona query enter the _diversify_order block at all: at the
+        # shipped 0 that persona never diversifies. _env_int clamps to lo=1, so
+        # every explicit export produces a LIVE cap and a different retriever
+        # from every archived artifact, and the inert 0 is reachable only by
+        # leaving the variable unset. That gap is why the resolved module value
+        # is recorded and not the string an operator typed.
+        "BRAIN_MAX_PER_SOURCE": resolved(
+            "DEFAULT_MAX_PER_SOURCE", "BRAIN_MAX_PER_SOURCE", str),
+        # Added to the BM25 score of every chunk under the reference prefixes
+        # (the scholar prefixes plus US-Law/ and CRPD/) on a default-persona
+        # question classified analytic, so a different set of chunks reaches the
+        # window and the answer is written from reference notes instead of
+        # parent/FAQ notes. str, NOT flag: it is a float, flag(2.0) renders "1",
+        # and brain.py's sweep table calls 1.0 the no-op, 1.5-3.0 the gaining
+        # band and 5.0+ the arm that evicts already-correct rows -- a whole
+        # spread that flag() collapses into one byte.
+        "BRAIN_ANALYTIC_BOOST": resolved(
+            "DEFAULT_ANALYTIC_BOOST", "BRAIN_ANALYTIC_BOOST", str),
         "BRAIN_ANN": flag(brain.ANN_ENABLED),
+        # ANN geometry. BRAIN_ANN above records only that the IVF path was
+        # taken; these four decide WHICH rows it can return, and every row
+        # outside the candidate set keeps -inf and drops out of the RRF pool.
+        # nprobe is the cell floor (lowering it starves the dense side; raising
+        # it past the ~36 cells at this index size is a no-op), min_docs is the
+        # corpus gate that silently reverts a BRAIN_ANN=1 run to the exact full
+        # scan once it is raised above the row count, overfetch multiplies
+        # RRF_POOL into the candidate target, and kmeans_iters changes centroid
+        # membership so the same query at the same ANN_SEED probes different
+        # cells. All four are inert while BRAIN_ANN=0 -- the same conditional
+        # shape BRAIN_ANN_SEED is already recorded under, and excluding these
+        # while keeping that one would be incoherent. str on all four: flag()
+        # renders nprobe=1 and nprobe=20 both as "1", which is the exact
+        # collapse this fingerprint exists to prevent.
+        "BRAIN_ANN_NPROBE": resolved("ANN_NPROBE", "BRAIN_ANN_NPROBE", str),
+        "BRAIN_ANN_MIN_DOCS": resolved(
+            "ANN_MIN_DOCS", "BRAIN_ANN_MIN_DOCS", str),
+        "BRAIN_ANN_OVERFETCH": resolved(
+            "ANN_OVERFETCH", "BRAIN_ANN_OVERFETCH", str),
+        "BRAIN_ANN_KMEANS_ITERS": resolved(
+            "ANN_KMEANS_ITERS", "BRAIN_ANN_KMEANS_ITERS", str),
         "BRAIN_OBSIDIAN_RANK": flag(brain.OBSIDIAN_RANK_ENABLED),
         "BRAIN_OBSIDIAN_BLOCKS": flag(brain.OBSIDIAN_BLOCKS_ENABLED),
+        # The two Obsidian keys above are on/off only, so RANK=1 at width 1 and
+        # RANK=1 at width 10 emitted byte-identical headers while appending a
+        # different number of notes to context_chunks. TOP_K is how many
+        # neighbors each seed contributes to the pool, MAX_EXPAND is the hard
+        # cap on how many survive into the prompt and the citation footer, and
+        # BLOCK_CANDIDATES is how deep best_chunk_for_note looks before falling
+        # back to ids[0] -- a fallback brain.py measures as selecting a
+        # different chunk on 171 of 273 multi-chunk notes. str on all three;
+        # flag() would record that expansion happened and erase the dose.
+        # Note the name skew: the env var is BRAIN_OBSIDIAN_TOP_K but the module
+        # constant carries the _PER_SEED suffix, the same shape as
+        # BRAIN_SCHOLAR_FACETS -> SCHOLAR_FACETS_N below. Spelling the attribute
+        # OBSIDIAN_TOP_K here would getattr to None and revive the environ
+        # fallback this function exists to remove.
+        "BRAIN_OBSIDIAN_TOP_K": resolved(
+            "OBSIDIAN_TOP_K_PER_SEED", "BRAIN_OBSIDIAN_TOP_K", str),
+        "BRAIN_OBSIDIAN_MAX_EXPAND": resolved(
+            "OBSIDIAN_MAX_EXPAND", "BRAIN_OBSIDIAN_MAX_EXPAND", str),
+        "BRAIN_OBSIDIAN_BLOCK_CANDIDATES": resolved(
+            "OBSIDIAN_BLOCK_CANDIDATES",
+            "BRAIN_OBSIDIAN_BLOCK_CANDIDATES", str),
         "BRAIN_SKILLS": flag(getattr(brain, "SKILLS_ENABLED", False)),
         "BRAIN_AUTOLEARN": flag(brain.AUTOLEARN_ENABLED),
+        # Web arms. The first two are inert unless --web is passed, the same
+        # conditional shape as BRAIN_ANN_SEED, and both change WHICH excerpts
+        # _answer_from_excerpts writes the answer from. RELEVANCE_FLOOR defaults
+        # ON, so an environ read of an unset variable records null for the
+        # SHIPPED arm and that null reads as OFF beside the explicit "0" of a
+        # floor-off run -- the same trap the scholar note below describes for
+        # BRAIN_SCHOLAR_CITE. SEMANTIC widens the fetch from MAX_WEB_FETCH to
+        # MAX_WEB_RESULTS and reorders by nomic cosine, and BRAIN_RERANK does
+        # not subsume it: the 3->5 widening happens with rerank off. Both are
+        # real booleans, so flag is right here and str would be noise.
+        "BRAIN_WEB_RELEVANCE_FLOOR": resolved(
+            "WEB_RELEVANCE_FLOOR_ENABLED", "BRAIN_WEB_RELEVANCE_FLOOR"),
+        "BRAIN_WEB_SEMANTIC": resolved(
+            "WEB_SEMANTIC_ENABLED", "BRAIN_WEB_SEMANTIC"),
+        # This one needs no --web at all: approved pages are written under
+        # VAULT_ROOT/_WebCache and build_index.py's _JUNK_DIR_NAMES does not
+        # exclude that dir, so the cap runs on EVERY persona of a plain vault
+        # run and reorders `order` before the persona cap sees it. _env_int
+        # clamps to lo=1, so "set it to 0 to disable" is false and only the
+        # resolved module value records the cap that actually ran.
+        "BRAIN_WEB_MAX_PER_SOURCE": resolved(
+            "WEB_MAX_PER_SOURCE", "BRAIN_WEB_MAX_PER_SOURCE", str),
         # Scholar arms, resolved through brain.py's defaults. CITE defaults ON,
         # so a raw environ read of an unset variable records null and loses the
         # shipped arm. Note SCHOLAR_FACETS_N: the env var is BRAIN_SCHOLAR_FACETS
