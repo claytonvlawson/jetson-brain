@@ -95,7 +95,31 @@ else:
     STORE_CHAR_CAP = 10000
 
 DEFAULT_MODEL = "llama3.2:3b"
-OLLAMA_HOST = "http://127.0.0.1:11434"
+
+
+def _ollama_host():
+    """The Ollama-shaped endpoint, overridable by the OLLAMA_HOST env var.
+
+    This has to read the SAME variable the `ollama` python client reads,
+    because brain reaches the model two different ways: chat()/chat_stream()
+    prefer the client and fall back to REST against this constant. When that
+    constant was a hardcoded literal, pointing the env var at a different
+    backend (the Spark's ollama_compat.py in front of vLLM) moved only the
+    client -- the REST fallback kept dialing a dead 11434, so the split showed
+    up only on the error path, which is the worst place to find it.
+
+    The client accepts a bare "host:port"; brain concatenates paths onto this
+    and needs a scheme, so one is added when missing. Default is unchanged, so
+    the Jetson behaves exactly as before."""
+    host = (os.environ.get("OLLAMA_HOST") or "").strip()
+    if not host:
+        return "http://127.0.0.1:11434"
+    if "://" not in host:
+        host = "http://" + host
+    return host.rstrip("/")
+
+
+OLLAMA_HOST = _ollama_host()
 
 # Two-tier models. FAST is the default: small, resident, quick draft answers.
 # DEEP is escalated per-question via "/deep <q>": larger, slower, more grounded.
