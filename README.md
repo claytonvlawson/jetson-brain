@@ -6,8 +6,10 @@
 Jetson Orin Nano 8GB. You pick any Ollama model you have pulled, chat with it,
 and every question is first grounded against your ThesisVault notes using a
 local BM25 retrieval index. When the vault does not have the answer, the agent
-falls back to a DuckDuckGo web search (via the `ddgs` package) and feeds the
-fetched page text back to the model. No cloud API, no keys, no cost.
+falls back to a web search (Brave Search API when `BRAVE_API_KEY` is set,
+otherwise DuckDuckGo via the `ddgs` package) and feeds the fetched page text
+back to the model. No cloud API is required for the core loop; Brave is an
+optional paid step up from the DuckDuckGo default.
 
 Pieces:
 
@@ -80,7 +82,7 @@ brain
 In the chat:
 
 - `/model` - list your Ollama models and switch the active one.
-- `/web` - toggle DuckDuckGo web fallback on or off.
+- `/web` - toggle web fallback (Brave if `BRAVE_API_KEY` is set, else DuckDuckGo) on or off.
 - `/exit` - quit.
 
 Type a normal question and the agent retrieves from the vault, optionally
@@ -217,6 +219,7 @@ set it in the environment before launching `brain`.
 | `BRAIN_SKILLS_NOTE_CHARS` | `3000` | Cap on one note pulled in by `get_note` |
 | `BRAIN_SKILLS_VERBOSE` | `0` | Log every selection and observation to stderr |
 | `BRAIN_TIMING` | `0` | One machine-parseable stage-timing line per question on stderr |
+| `BRAVE_API_KEY` | unset | Web-search provider key from [brave.com/search/api](https://brave.com/search/api) (free tier: 2,000 queries/month). When set, `web_search()` tries Brave first and falls back to DuckDuckGo on any error; when unset, DuckDuckGo is used directly as before |
 
 With `BRAIN_TIMING=1` the skill loop reports its own stage as `skills=<seconds>`
 between `phase1` and `route`.

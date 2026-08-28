@@ -776,6 +776,11 @@ def _reset_chat_stats():
 MAX_WEB_RESULTS = 5
 MAX_WEB_FETCH = 3
 WEB_FETCH_TIMEOUT = 8
+# Brave Search API (api.search.brave.com) is the primary web-search provider
+# when a key is present; DuckDuckGo (ddgs) stays as the automatic fallback so
+# a missing/expired/rate-limited key degrades to the old behavior instead of
+# going silent. See brave_search()/web_search() below.
+BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY")
 # Prompt-facing cap: the most fetched page text any single excerpt contributes
 # to a generation prompt. Deliberately unchanged at 2000. The persistence cap
 # is STORE_CHAR_CAP (web_paths), which is larger, so a stored note keeps depth
@@ -2364,7 +2369,38 @@ def chat_stream_holdback(model, messages, decide, begin_stream,
 # ---------------------------------------------------------------------------
 # Web search + fetch.
 # ---------------------------------------------------------------------------
-def web_search(query):
+def brave_search(query):
+    """Run a Brave Search API text search. Returns a list of result dicts
+    shaped like {"href", "title", "body"} (matching ddgs's shape so callers
+    need no changes), or [] on any failure."""
+    try:
+        import requests
+        resp = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": BRAVE_API_KEY,
+            },
+            params={"q": query, "count": MAX_WEB_RESULTS},
+            timeout=WEB_FETCH_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        items = (data.get("web") or {}).get("results") or []
+        return [
+            {
+                "href": it.get("url"),
+                "title": it.get("title"),
+                "body": it.get("description"),
+            }
+            for it in items
+            if it.get("url")
+        ]
+    except Exception:
+        return []
+
+
+def ddg_search(query):
     """Run a DuckDuckGo text search. Returns a list of result dicts or []."""
     try:
         from ddgs import DDGS
@@ -2372,6 +2408,17 @@ def web_search(query):
         return list(results) if results else []
     except Exception:
         return []
+
+
+def web_search(query):
+    """Search the web via Brave (when BRAVE_API_KEY is set), falling back to
+    DuckDuckGo if Brave is unconfigured or the request fails. Returns a list
+    of result dicts or []."""
+    if BRAVE_API_KEY:
+        results = brave_search(query)
+        if results:
+            return results
+    return ddg_search(query)
 
 
 def fetch_page(url):
@@ -2537,8 +2584,9 @@ def gather_web_context(query):
     """Search, fetch hrefs, and return a list of (url, excerpt) capped at
     MAX_WEB_FETCH.
 
-    Default: takes DuckDuckGo's first MAX_WEB_FETCH results in search-engine
-    order (original behavior, unchanged fetch cost). With BRAIN_WEB_SEMANTIC=1,
+    Default: takes web_search()'s (Brave, or DuckDuckGo if unconfigured) first
+    MAX_WEB_FETCH results in search-engine order (original behavior, unchanged
+    fetch cost). With BRAIN_WEB_SEMANTIC=1,
     fetches all MAX_WEB_RESULTS candidates and keeps the MAX_WEB_FETCH closest
     to the query by embedding cosine instead -- see WEB_SEMANTIC_ENABLED above.
     """

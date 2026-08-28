@@ -18,6 +18,10 @@ WorkingDirectory=/mnt/nvme/brain
 # resolve the .ts.net name). Resolving at startup means it survives IP changes.
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do /usr/bin/tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
 ExecStart=/bin/sh -c 'exec env BRAIN_WEB_HOST="$(/usr/bin/tailscale ip -4 | head -n1)" /usr/bin/python3 /mnt/nvme/brain/brain_web.py'
+# Optional -- leading "-" means the service still starts if this file is
+# absent, and brain.py's web_search() falls back to DuckDuckGo unconfigured.
+# See brave.env.example.
+EnvironmentFile=-/etc/brave.env
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=3

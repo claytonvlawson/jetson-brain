@@ -32,4 +32,5 @@ index-mac
 .DS_Store
 
 advisor.env.local
+brave.env.local
 .venv-asl/
