@@ -10,17 +10,24 @@ eval_retrieval.py depend on -- those two harnesses never import this file.
 Env vars (matching brain.py's BRAIN_* convention):
     GROQ_API_KEY      Required for the cloud tier. Absent -> auto mode falls
                        back to local silently; cloud_speed mode raises.
-    BRAIN_CLOUD_MODEL Groq model id. Default: "llama-3.1-8b-instant".
+    BRAIN_CLOUD_MODEL Groq model id. Default: "openai/gpt-oss-20b".
     BRAIN_ROUTE_MODE  "auto" (default) | "local_only" | "cloud_speed".
     BRAIN_PRIVACY_SCAN "0" (default) | "1" -- gate a pre-response privacy
                        scan of the retrieved context (see privacy_scan below).
 
-Usage:
+Usage (library):
     from langchain_agent import answer
     text = answer("When did Gallaudet found the Clerc Center?")
+
+Usage (CLI, same shape as ThesisVault's vault_agent.py):
+    python3 langchain_agent.py "When did Gallaudet found the Clerc Center?"
+    python3 langchain_agent.py --interactive
+    python3 langchain_agent.py --interactive --persona parent
 """
 
+import argparse
 import os
+import sys
 
 import brain
 import vault_tools_local
@@ -234,3 +241,52 @@ def answer(question, persona="default", deep=False):
 
     model_name = brain.DEEP_MODEL if tier == "local-deep" else brain.DEFAULT_MODEL
     return brain.chat_once(model_name, messages)
+
+
+def interactive(persona="default"):
+    """A REPL that just takes typed text -- same shape as ThesisVault's
+    vault_agent.interactive(): a bare `> ` prompt, no Python quoting, Ctrl+C/
+    EOF to exit. `/deep <question>` forces the deep tier for that one turn,
+    matching brain.py's own `/deep` convention elsewhere in this repo."""
+    groq_status = "loaded" if _groq_key() else "not set (local only)"
+    print("Jetson Brain (LangChain) -- persona=%s, GROQ_API_KEY=%s. "
+          "Ctrl+C to exit.\n" % (persona, groq_status))
+    while True:
+        try:
+            q = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not q:
+            continue
+        deep = False
+        if q.lower().startswith("/deep "):
+            deep = True
+            q = q[len("/deep "):].strip()
+        tier = choose_tier(q, persona=persona, deep=deep)
+        print("[route] %s" % tier, file=sys.stderr)
+        print()
+        print(answer(q, persona=persona, deep=deep))
+        print()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("question", nargs="?")
+    ap.add_argument("--interactive", action="store_true")
+    ap.add_argument("--persona", default="default",
+                     choices=["default", "parent", "scholar"])
+    ap.add_argument("--deep", action="store_true")
+    args = ap.parse_args()
+
+    if args.interactive:
+        interactive(persona=args.persona)
+        return
+    if args.question:
+        print(answer(args.question, persona=args.persona, deep=args.deep))
+        return
+    ap.print_help()
+
+
+if __name__ == "__main__":
+    main()
