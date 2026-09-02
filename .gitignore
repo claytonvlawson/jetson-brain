@@ -33,4 +33,5 @@ index-mac
 
 advisor.env.local
 brave.env.local
+groq.env.local
 .venv-asl/

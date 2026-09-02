@@ -9,3 +9,9 @@ mediapipe
 curl_cffi
 pypdf
 trafilatura
+# langchain_agent.py: wraps brain.chat_once/chat_stream as a ChatModel and
+# adds an OpenAI-compatible Groq speed tier. langchain-openai alone (not the
+# full langchain meta-package) covers both -- Groq via base_url override, and
+# any future provider swap without a new dependency.
+langchain-core
+langchain-openai
