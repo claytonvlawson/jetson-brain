@@ -58,6 +58,18 @@ DEFAULT_CLOUD_MODEL = "openai/gpt-oss-20b"
 # uninstalling a system package outside pip's control.
 _ACCEPT_ENCODING_NO_BROTLI = {"Accept-Encoding": "gzip, deflate"}
 
+# Measured live: Groq's on_demand service tier occasionally stalls a request
+# for 40+ seconds with no error at all (not a slow answer -- a hang), while a
+# normal call completes in well under a second. The whole point of the cloud
+# tier is speed, so a call that isn't fast should fail fast and let answer()
+# fall back to local rather than leave the REPL stuck. BRAIN_CLOUD_TIMEOUT_S
+# overrides for a slower/less reliable link.
+def _cloud_timeout_s():
+    try:
+        return float(os.environ.get("BRAIN_CLOUD_TIMEOUT_S") or 8)
+    except ValueError:
+        return 8.0
+
 
 def _route_mode():
     return (os.environ.get("BRAIN_ROUTE_MODE") or "auto").strip().lower()
@@ -152,7 +164,12 @@ if _LANGCHAIN_AVAILABLE:
                 "GROQ_API_KEY is not set -- cloud tier unavailable.")
         return ChatOpenAI(model=_cloud_model_name(), api_key=key,
                            base_url=GROQ_BASE_URL, temperature=0.2,
-                           default_headers=_ACCEPT_ENCODING_NO_BROTLI)
+                           default_headers=_ACCEPT_ENCODING_NO_BROTLI,
+                           timeout=_cloud_timeout_s(),
+                           # answer()'s own loop already retries with a fresh
+                           # client on a bad attempt; the SDK's built-in retry
+                           # would just re-extend a stall inside one attempt.
+                           max_retries=0)
 
 
 def _looks_simple(question, persona):
@@ -228,16 +245,25 @@ def answer(question, persona="default", deep=False):
     if tier == "cloud-speed":
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
-            model = make_cloud_chat_model()
             lc_in = [SystemMessage(content=messages[0]["content"]),
                      HumanMessage(content=messages[1]["content"])]
-            result = model.invoke(lc_in)
-            return result.content
+            # Measured live against Groq's on_demand service tier: an
+            # occasional call comes back with finish_reason "stop" and a
+            # genuinely empty .content -- not an exception, so the except
+            # below never sees it, and a naive caller would hand the user a
+            # blank answer. One retry (a fresh ChatOpenAI instance, not the
+            # same one) clears it every time it was reproduced; only fall
+            # through to local if BOTH attempts come back empty.
+            for _attempt in range(2):
+                result = make_cloud_chat_model().invoke(lc_in)
+                if result.content and result.content.strip():
+                    return result.content
         except Exception:
-            # Groq unreachable/misconfigured mid-turn -- fall back to local
-            # rather than surface a cloud error for a question the 3B/7B can
-            # already answer.
-            tier = "local-deep" if deep else "local-fast"
+            pass
+        # Groq unreachable/misconfigured, or returned empty twice in a row --
+        # fall back to local rather than surface a cloud error (or blank
+        # answer) for a question the 3B/7B can already answer.
+        tier = "local-deep" if deep else "local-fast"
 
     model_name = brain.DEEP_MODEL if tier == "local-deep" else brain.DEFAULT_MODEL
     return brain.chat_once(model_name, messages)
