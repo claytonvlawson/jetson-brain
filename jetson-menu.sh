@@ -44,6 +44,7 @@ show_menu(){
   echo "    ${gr}7${r})  Rebuild the vault index (with embeddings)"
   echo "    ${gr}8${r})  Open the README"
   echo "    ${gr}9${r})  ASL sign detection   ${dm}(streams your Mac webcam -> MediaPipe hands)${r}"
+  echo "    ${gr}g${r})  LangChain agent  ${dm}(same vault, local models + optional Groq cloud speed tier)${r}"
   echo "    ${gr}w${r})  Review fetched web pages     ${dm}($(web_queue_count) waiting for approval)${r}"
   echo "    ${gr}q${r})  Quit to shell   ${dm}(type 'menu' to reopen)${r}"
 }
@@ -138,6 +139,24 @@ asl_detect(){
   python3 "$BRAIN_ROOT/asl_server.py"
 }
 
+# langchain_agent.py's own CLI (interactive() / main() in that file) --
+# same vault and local models as option 1, plus an optional Groq cloud tier
+# for short/simple questions. groq.env.local is the same git-ignored,
+# chmod-600 key file make_cloud_chat_model() reads GROQ_API_KEY from; its
+# absence just means the router stays local-only (see choose_tier()).
+langchain_repl(){
+  echo
+  echo "${b}LangChain agent${r}   ${dm}(local llama3.2:3b/qwen2.5:7b + optional Groq cloud speed tier)${r}"
+  if [ -f "$BRAIN_ROOT/groq.env.local" ]; then
+    set -a; source "$BRAIN_ROOT/groq.env.local"; set +a
+    echo "  ${dm}GROQ_API_KEY loaded from groq.env.local -- short questions may route to Groq.${r}"
+  else
+    echo "  ${dm}No groq.env.local found -- running local-only. See groq.env.example.${r}"
+  fi
+  echo
+  ( cd "$BRAIN_ROOT" && python3 langchain_agent.py --interactive )
+}
+
 main(){
   while true; do
     clear 2>/dev/null
@@ -160,6 +179,7 @@ main(){
          python3 "$BRAIN_ROOT/build_index.py" --embed; pause ;;
       8) if [ -f "$BRAIN_ROOT/README.md" ]; then less "$BRAIN_ROOT/README.md"; elif [ -f "$HOME/README.md" ]; then less "$HOME/README.md"; else echo "README not found."; sleep 1; fi ;;
       9) asl_detect; pause ;;
+      g|G) langchain_repl; pause ;;
       w|W) web_review ;;
       q|Q|"") clear 2>/dev/null; echo "At the shell. Type ${b}menu${r} to reopen the menu, or ${b}brain${r} to chat."; break ;;
       *) echo "Unknown choice: $choice"; sleep 1 ;;
