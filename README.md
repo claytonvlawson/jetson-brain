@@ -32,6 +32,25 @@ Runs entirely on-device, no cloud inference:
 | Power mode | MAXN_SUPER (uncapped clocks; Super devkit also supports 15W and 25W capped modes) |
 | Access | USB-C (`192.168.55.1`) or Tailscale (`100.x.x.x`) |
 
+### Obsidian connection
+
+Obsidian's Smart Connections plugin runs on the Mac and talks to the brain as
+if it were a normal local Ollama server:
+
+```
+Obsidian (Mac)
+  -> http://127.0.0.1:11435            (LaunchAgent-managed SSH tunnel, always up)
+    -> ssh over USB-C to the Jetson
+      -> brain_ollama_shim.py :11435   (loopback-only, fakes the Ollama API)
+        -> brain.py handle_question()  (BM25 retrieval + Ollama generate)
+          -> Ollama :11434             (llama3.2:3b / qwen2.5:7b)
+```
+
+The shim is deliberately loopback-only on the Jetson - the Mac is not on the
+tailnet, so the SSH tunnel is the only path in, and nothing on the LAN or
+tailnet can reach port 11435 directly. See "Obsidian Smart Chat against the
+brain" below for the full setup, service files, and troubleshooting.
+
 Models served via Ollama, GPU-accelerated, weights on the NVMe:
 
 | Model | Role | Measured throughput (MAXN_SUPER) |
