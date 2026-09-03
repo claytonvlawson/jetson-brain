@@ -11,9 +11,40 @@ otherwise DuckDuckGo via the `ddgs` package) and feeds the fetched page text
 back to the model. No cloud API is required for the core loop; Brave is an
 optional paid step up from the DuckDuckGo default.
 
+`advisor_server.py` wraps this same retrieval core in a small HTTP API
+(`/chat`, `/feedback`, `/health`) and is the entry point for the **Language
+Deprivation Advisor** - a parent-facing agent that answers questions about
+language deprivation risk in deaf/hard-of-hearing children, grounded in a
+ThesisVault of research on the topic instead of general web content. It is
+`brain.py`'s retrieval pipeline with a persona and a web-facing surface, not a
+separate codebase.
+
+## Hardware
+
+Runs entirely on-device, no cloud inference:
+
+| | |
+|---|---|
+| Device | NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super, 8GB |
+| JetPack / L4T | 6.2 / R36.4.3 (Ubuntu 22.04.5 LTS, aarch64) |
+| Memory | 7.4 GiB RAM + 8 GiB zram swap |
+| Storage | 512 GB microSD (boot/root) + 256 GB NVMe at `/mnt/nvme` (models, vault, index) |
+| Power mode | MAXN_SUPER (uncapped clocks; Super devkit also supports 15W and 25W capped modes) |
+| Access | USB-C (`192.168.55.1`) or Tailscale (`100.x.x.x`) |
+
+Models served via Ollama, GPU-accelerated, weights on the NVMe:
+
+| Model | Role | Measured throughput (MAXN_SUPER) |
+|---|---|---|
+| `llama3.2:3b` | fast / default tier | ~19.1 tok/s generation |
+| `qwen2.5:7b` | deep tier (`/deep`) | ~10.6 tok/s generation, ~420 tok/s prefill |
+| `nomic-embed-text` | retrieval embeddings / rerank | - |
+
 Pieces:
 
 - `brain.py` - the chat loop (retrieval, web fallback, Ollama streaming).
+- `advisor_server.py` - HTTP wrapper exposing the RAG core as the Language
+  Deprivation Advisor (`/chat`, `/feedback`, `/health`).
 - `build_index.py` - builds `index/bm25.pkl` from the markdown in `vault/`.
 - `vault/` - the ThesisVault markdown, synced from the Mac.
 - `brain_skills.py` - the optional bounded skill loop (`BRAIN_SKILLS=1`).
