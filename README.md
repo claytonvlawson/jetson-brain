@@ -30,7 +30,7 @@ Runs entirely on-device, no cloud inference:
 | Memory | 7.4 GiB RAM + 8 GiB zram swap |
 | Storage | 512 GB microSD (boot/root) + 256 GB NVMe at `/mnt/nvme` (models, vault, index) |
 | Power mode | MAXN_SUPER (uncapped clocks; Super devkit also supports 15W and 25W capped modes) |
-| Access | USB-C (`192.168.55.1`) or Tailscale (`100.x.x.x`) |
+| Access | `ssh jetson` (Tailscale, `100.x.x.x`) day to day; `ssh jetson-usb` (`192.168.55.1`) as the USB-C fallback when Tailscale is down |
 
 ### Obsidian connection
 
@@ -58,6 +58,19 @@ Models served via Ollama, GPU-accelerated, weights on the NVMe:
 | `llama3.2:3b` | fast / default tier | ~19.1 tok/s generation |
 | `qwen2.5:7b` | deep tier (`/deep`) | ~10.6 tok/s generation, ~420 tok/s prefill |
 | `nomic-embed-text` | retrieval embeddings / rerank | - |
+
+### Cloud speed tier (Groq)
+
+`langchain_agent.py` can route short, non-persona questions to Groq's
+on-demand `openai/gpt-oss-20b` tier instead of generating locally
+(`BRAIN_ROUTE_MODE`, `BRAIN_CLOUD_MODEL`, `BRAIN_CLOUD_TIMEOUT_S`). Retrieval
+is unchanged either way - BM25/vault RAG always runs locally; only the final
+answer-generation step moves to the cloud. One measured comparison from
+2026-09-02: Groq generated the same question's answer in ~0.38s versus
+several seconds for the local `llama3.2:3b`. That's a single latency
+observation from that day's commit message, not a repeatable benchmark or a
+retrieval-quality comparison - no eval has measured accuracy differences
+between the two paths.
 
 Pieces:
 
@@ -125,9 +138,12 @@ The Jetson reaches the internet through the Mac over USB-C. Enable it once:
 ## Daily use
 
 ```bash
-ssh user@192.168.55.1
+ssh jetson
 brain
 ```
+
+(`jetson` resolves over Tailscale; use `ssh jetson-usb` if Tailscale is down
+and the USB-C cable is plugged in.)
 
 In the chat:
 
@@ -151,7 +167,7 @@ generates against it.
 Install the service on the Jetson (one time):
 
 ```bash
-ssh user@192.168.55.1
+ssh jetson
 sudo cp /mnt/nvme/brain/brain-ollama-shim.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now brain-ollama-shim.service
