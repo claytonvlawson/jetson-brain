@@ -320,19 +320,29 @@ ssh "${JETSON}" "chmod +x '${REMOTE}/install.sh' '${REMOTE}/jetson-online.sh' '$
 # brain-ollama-shim.service is in the same boat (it imports brain.py to answer
 # Obsidian Smart Chat), and like the other two it is only restarted when it is
 # already installed and running, so a Jetson that never enabled it is untouched.
-# systemctl needs root here, so this is best-effort: if sudo is not available
-# non-interactively, print the commands rather than failing the deploy.
+# systemctl needs root here. The Jetson grants snowbeach a SCOPED NOPASSWD
+# rule (/etc/sudoers.d/brain-deploy): exactly "/usr/bin/systemctl restart
+# advisor", "... brain-web", "... brain-ollama-shim" -- unit names WITHOUT
+# the .service suffix, and nothing else. So the gate must be the real
+# command (sudo -n -l <cmd> answers "may I run this?" without a password),
+# not "sudo -n true", which that rule does not cover and which made this
+# step report SKIPPED on a device that could restart all three just fine.
+# Best-effort: if a unit is not permitted, print the manual command.
 echo "==> Restarting services that hold brain.py in memory ..."
-ssh "${JETSON}" 'if sudo -n true 2>/dev/null; then
-  for u in advisor.service brain-web.service brain-ollama-shim.service; do
-    if systemctl list-unit-files "$u" >/dev/null 2>&1 && systemctl is-active --quiet "$u"; then
-      sudo systemctl restart "$u" && echo "    restarted $u"
+ssh "${JETSON}" 'manual=""
+for u in advisor brain-web brain-ollama-shim; do
+  if systemctl list-unit-files "$u.service" >/dev/null 2>&1 && systemctl is-active --quiet "$u.service"; then
+    if sudo -n -l /usr/bin/systemctl restart "$u" >/dev/null 2>&1; then
+      sudo -n /usr/bin/systemctl restart "$u" && echo "    restarted $u.service"
+    else
+      manual="$manual $u.service"
     fi
-  done
-else
-  echo "    SKIPPED: passwordless sudo unavailable on the Jetson."
-  echo "    Services are still running PRE-DEPLOY code. Run manually:"
-  echo "      sudo systemctl restart advisor.service brain-web.service brain-ollama-shim.service"
+  fi
+done
+if [ -n "$manual" ]; then
+  echo "    SKIPPED (no passwordless sudo for these):$manual"
+  echo "    They are still running PRE-DEPLOY code. Run manually:"
+  echo "      sudo systemctl restart$manual"
 fi'
 
 # ---- Done ---------------------------------------------------------------
