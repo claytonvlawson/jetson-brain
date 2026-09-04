@@ -744,6 +744,17 @@ def apply_meta(chunk_texts, frontmatter, meta, fallback_title, title):
     return chunk_texts, True
 
 
+def chunk_tags(fields):
+    # Normalized frontmatter tags for the chunk rows: lowercase, stripped of a
+    # leading '#', de-duplicated in order. Empty list when the note has none.
+    out = []
+    for t in (fields or {}).get("tags") or ():
+        t = str(t).strip().lstrip("#").lower()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
 def fm_meta_sentence(fields):
     # Compact metadata sentence injected into the note's first chunk (--meta
     # inline) or emitted as a synthetic lead chunk (--meta chunk) so the
@@ -954,6 +965,7 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
             meta_notes += 1
 
         by_source.setdefault(rel_source, [])
+        note_tags = chunk_tags(fm_fields)
         for pos, chunk_text in enumerate(chunk_texts):
             toks = tokenize(chunk_text)
             if not toks:
@@ -971,6 +983,12 @@ def build(vault, out, embed=False, embed_model=DEFAULT_EMBED_MODEL,
             # note rather than per chunk.
             if has_card and pos == 0:
                 row["card"] = True
+            # Frontmatter tags ride on every chunk of a tagged note (absent
+            # on untagged notes) so brain.py's default-persona scope can mask
+            # by tag as well as by folder. Chunk text is unchanged, so the
+            # tokenizer version stays put and older pickles still load.
+            if note_tags:
+                row["tags"] = note_tags
             chunks.append(row)
             by_source[rel_source].append(next_id)
             next_id += 1

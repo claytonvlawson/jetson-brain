@@ -340,6 +340,74 @@ pose transformers, gesture CNNs, Korean/Turkish/Kenyan SLR datasets). A
 folder scope cannot separate those from Hall 2017 or Mayberry 2018 in the
 same folder. Answers: `eval_results/scope_k60_heldout_answers.jsonl`.
 
+### Default-persona tag scope (2026-09-04 afternoon, Clayton's call 14:10)
+
+The folder scope could not reach the off-topic papers that sit directly under
+top-level `Sources/` next to the core literature: by frontmatter tag, 59 notes
+are `computer-vision` (all in `Sources/`), 22 `blockchain` in `Sources/`
+(14 more under `Blockchain/`, already folder-excluded), 8 `dataset`,
+7 `security`. Clayton chose a tag exclude in code over moving the notes.
+
+Code: `build_index.py` now puts the note's frontmatter tags (lowercased,
+de-duplicated, via the new `chunk_tags()`) on every chunk row as `tags`,
+absent on untagged notes; `update_index.py` writes the same field on the
+incremental path. Chunk text and `TOKENIZER_VERSION` are unchanged, so old
+pickles still load and simply get the folder scope alone. `brain.py`
+`_DEFAULT_EXCLUDE_TAGS` (computer-vision, blockchain, security, dataset,
+erc-20, formal-verification; `BRAIN_DEFAULT_EXCLUDE_TAGS` replaces the list)
+feeds the SAME `_default_scope_excluded()` mask, so the three `_mask_scores`
+call sites, the sub-question rankings and the `+scope` mode tag needed no
+edit. A tag yields to the query the way a folder does ("computer vision" in
+the question keeps those papers). `sign-language-recognition` is deliberately
+NOT excluded: it also tags `International-Law/Northern Ireland Sign Language
+Bill 2026.md` and Atwell 2025 (community-informed design). `BRAIN_DEFAULT_SCOPE=0`
+turns folders and tags off together. Tests: `test_default_scope.py` (now 23
+checks, tag fixtures 6-8) and the new `test_index_tags.py` (runs the builder
+`--no-embed` on a temp vault; inline and block tag forms, untagged rows have
+no key, ids positional). Both in the deploy manifest.
+
+Mac index rebuilt with `--embed` (3,386 chunks, 3,372 tagged; computer-vision
+327 chunks, blockchain 219, sign-language-recognition 335).
+
+Retrieval sanity, retrieval_gold, HyDE off: folder+tag in_context 25/40,
+found 39/40, recall@8 27 (folder-only 24, 38, 27; scope off 25 found 37).
+`asl_full_language_2` moved 8 -> 7 into context; no row left context.
+
+**Judged gate (heldout, 7B judge): folder+tag 49.8 vs folder-only 49.8, all
+14 tied** (no-scope baseline 52.1, the one difference is still
+deaf_world_visual 83 -> 50 from the folder scope). Only 3 contexts changed:
+asl_full_language_h swapped Albanie 2020 BSL-1K for Chamberlain Mayberry 2008;
+legal_recognition_h dropped Haque 2025 Conformer (and De Meulder 2014) for
+DeafMonitor and Rogers 2013; bilingual_bimodal_h swapped Li Bain Steinberg
+2003 for "Starting Late Ages 5 and Up". Answers:
+`eval_results/tagscope_k60_heldout_answers.jsonl`. Shipped because it does
+exactly what was asked (no SLR/ML/blockchain chunk can reach the advisor
+now), retrieval gained a row and lost none, and the judged set is unchanged.
+
+Lost with the previous session: the queued dense-exclude and `--mode scholar`
+heldout arms died with the session (0-byte JSONs, no answers). Dense-exclude
+is superseded by the scope mask; the scholar arm was never run.
+
+**Eval stall, root cause found (second occurrence):** the first tag-scope
+judged run sat 12 min with 3.5 s CPU and 14 MB RSS on one ESTABLISHED socket
+to 11434 while `ollama serve` (0.31.1, launchd) answered NOTHING, not even a
+3-token generate against the already-loaded qwen2.5:7b (curl -m 20 timed
+out). Killing the client alone freed Ollama instantly; the relaunch ran clean
+in 19 min. Why no timeout fired: `brain.py` chat()/chat_stream()/embed use
+the module-level `ollama.chat(...)` client (ollama 0.6.2), whose httpx
+timeout is `None`; the REST fallback's 120 s timeout only applies after the
+client raises, which it never does. Next fix: build one
+`ollama.Client(timeout=...)` in brain.py and use it at the three
+`ollama.chat` call sites (2399, 2447, 2555). Not changed this session (no
+gate covering the chat path after the eval). Also: this Mac has no `timeout`
+or `gtimeout` binary, so the `timeout 2400` wrapper from the earlier note
+never actually ran; wrap with `perl -e 'alarm 2400; exec @ARGV'` instead.
+
+Next thread (the actual score lever): 22 of the 40 missed heldout facts are
+VAULT-ONLY in synthesized notes (Deaf Gain.md, Harlan Lane.md, Maryland
+School for the Deaf.md, Gulati 2018) that on-topic chunks outrank; the tag
+scope frees at most 3 of 126 context slots and cannot touch that.
+
 Trap: every dense scoring call on this Mac logs numpy "divide by zero /
 overflow / invalid value encountered in matmul". It is SPURIOUS: numpy 1.26
 with Apple's Accelerate BLAS raises FP flags on a clean unit-norm product

@@ -253,12 +253,17 @@ def run(vault=DEFAULT_VAULT, index_path=DEFAULT_INDEX, quiet=False,
         new_chunks = []
         for src in sorted(fresh):
             texts, frontmatter, body, title, has_card = fresh[src]
+            # Same per-chunk tag field build_index.py writes (web notes have
+            # no frontmatter, so this is normally empty).
+            note_tags = bi.chunk_tags(bi.parse_frontmatter_fields(frontmatter))
             ids_for_src = []
             for pos, text in enumerate(texts):
                 chunk = {"id": next_id, "text": text,
                          "source": src, "title": title}
                 if has_card and pos == 0:
                     chunk["card"] = True
+                if note_tags:
+                    chunk["tags"] = note_tags
                 new_chunks.append(chunk)
                 ids_for_src.append(next_id)
                 next_id += 1

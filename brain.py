@@ -1111,7 +1111,29 @@ DEFAULT_MAX_PER_SOURCE = _env_int("BRAIN_MAX_PER_SOURCE", 0)
 # ("what did the blockchain vendor evaluation say") keeps that folder, the
 # same folder-token match FOLDER_BOOST uses. Parent and scholar are untouched.
 # BRAIN_DEFAULT_SCOPE=0 turns it off; BRAIN_DEFAULT_EXCLUDE replaces the list.
+#
+# Tag scope (same mask, same switch): the off-topic papers the folder list
+# cannot reach live directly under top-level Sources/ next to the core
+# literature (59 computer-vision / 22 blockchain notes on 2026-09-04), so the
+# default persona also masks chunks whose frontmatter tags (carried on each
+# chunk by build_index.py) hit _DEFAULT_EXCLUDE_TAGS. "sign-language-
+# recognition" is deliberately NOT in the list: it also tags legal-recognition
+# notes (Northern Ireland Sign Language Bill). A tag yields to the query the
+# same way a folder does ("computer vision" in the question keeps that tag).
+# BRAIN_DEFAULT_EXCLUDE_TAGS replaces the list; older pickles without a tags
+# field simply get the folder scope alone.
 DEFAULT_SCOPE_ENABLED = _env_flag("BRAIN_DEFAULT_SCOPE", "1")
+_DEFAULT_EXCLUDE_TAGS = tuple(
+    t.lower() for t in _prefix_tuple(os.environ.get("BRAIN_DEFAULT_EXCLUDE_TAGS"))
+) or (
+    "computer-vision",
+    "blockchain",
+    "security",
+    "dataset",
+    "erc-20",
+    "formal-verification",
+)
+_TAG_TOKENS = {}
 _DEFAULT_EXCLUDE_PREFIXES = _prefix_tuple(os.environ.get("BRAIN_DEFAULT_EXCLUDE")) or (
     "Blockchain/",
     "Research/",
@@ -1129,12 +1151,17 @@ _DEFAULT_EXCLUDE_PREFIXES = _prefix_tuple(os.environ.get("BRAIN_DEFAULT_EXCLUDE"
 
 
 def _default_scope_excluded(chunks, qtok, persona):
-    """Chunk ids the default persona must not retrieve, or an empty set.
+    """Positional chunk indices the default persona must not retrieve, or an
+    empty set.
 
-    Empty for every other persona, when the scope is off, and for every prefix
-    whose top-level folder the query names (so the scope never hides a note
-    the user asked for by folder)."""
-    if persona != "default" or not DEFAULT_SCOPE_ENABLED or not _DEFAULT_EXCLUDE_PREFIXES:
+    Two lists feed it: folder prefixes (_DEFAULT_EXCLUDE_PREFIXES) matched on
+    the chunk's source path, and frontmatter tags (_DEFAULT_EXCLUDE_TAGS)
+    matched on the chunk's "tags" field. Empty for every other persona, when
+    the scope is off, and per entry when the query names that folder or tag
+    (so the scope never hides a note the user asked for)."""
+    if persona != "default" or not DEFAULT_SCOPE_ENABLED:
+        return set()
+    if not _DEFAULT_EXCLUDE_PREFIXES and not _DEFAULT_EXCLUDE_TAGS:
         return set()
     qset = set(qtok or ())
     live = []
@@ -1147,11 +1174,27 @@ def _default_scope_excluded(chunks, qtok, persona):
         if ftok & qset:
             continue          # the query names this folder: keep it
         live.append(p)
-    if not live:
+    live_tags = set()
+    for t in _DEFAULT_EXCLUDE_TAGS:
+        ttok = _TAG_TOKENS.get(t)
+        if ttok is None:
+            ttok = set(tokenize(t.replace("-", " ")))
+            _TAG_TOKENS[t] = ttok
+        if ttok & qset:
+            continue          # the query names this tag: keep it
+        live_tags.add(t)
+    if not live and not live_tags:
         return set()
     live = tuple(live)
-    return {i for i, c in enumerate(chunks)
-            if str(c.get("source") or "").startswith(live)}
+    out = set()
+    for i, c in enumerate(chunks):
+        if live and str(c.get("source") or "").startswith(live):
+            out.add(i)
+        elif live_tags:
+            ctags = c.get("tags")
+            if ctags and live_tags.intersection(ctags):
+                out.add(i)
+    return out
 
 
 def _mask_scores(scores, excluded, floor):
