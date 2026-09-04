@@ -324,9 +324,21 @@ folder-token match as FOLDER_BOOST). Mode tag `+scope`. Knobs:
 
 Retrieval sanity, retrieval_gold, HyDE off: scope on 24/40 MRR 0.505,
 recall@8 27, found 38; off 24/40 MRR 0.502, recall@8 25, found 37. No row
-lost rank. Judged gate queued: `eval_results/scope_k60_heldout_answers.jsonl`
-against the 52.1 baseline; two other arms run first (`--mode scholar`, and
-`BRAIN_DENSE_EXCLUDE` of the same folders on the dense arm only).
+lost rank.
+
+**Judged gate (heldout, 7B judge): scope on 49.8 vs off 52.1; 13 of 14
+tied, deaf_world_visual 83 -> 50.** Only 4 of 14 contexts changed at all,
+each by one slot (Northern Ireland bill -> Lane/Hoffmeister/Bahan 1996;
+Belk 2016 -> European Union of the Deaf; Joseph Murray card dropped). The
+scope does what it says (blockchain, JetFuel, datasets, vendor notes can
+no longer reach the advisor) but it barely touches this set, because **the
+off-topic papers that DO reach context live directly under top-level
+`Sources/`, next to the core literature, not in the excluded subfolder**:
+48 of the 157 top-level Sources notes (263 chunks) are sign-language-
+recognition / AI-ML papers by title (BSL-1K, WLASL, SignFormer-GCN, SANet,
+pose transformers, gesture CNNs, Korean/Turkish/Kenyan SLR datasets). A
+folder scope cannot separate those from Hall 2017 or Mayberry 2018 in the
+same folder. Answers: `eval_results/scope_k60_heldout_answers.jsonl`.
 
 Trap: every dense scoring call on this Mac logs numpy "divide by zero /
 overflow / invalid value encountered in matmul". It is SPURIOUS: numpy 1.26
