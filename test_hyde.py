@@ -56,6 +56,10 @@ try:
     brain.chat_once = stub("The Maryland School for the Deaf runs campuses in "
                            "Frederick and Columbia and teaches in ASL and English.")
     calls.clear()
+    # Snapshot the global BEFORE the call: the default is env-driven
+    # (BRAIN_NUM_PREDICT, 800 since the parent-agent scope-routes work), so
+    # the check is "unchanged by HyDE", not "equals a literal".
+    num_predict_before = brain.GEN_OPTIONS["num_predict"]
     hyp = brain.hyde_hypothesis(Q)
     check_true("returns the hypothesis", hyp and "Frederick" in hyp)
     check("makes exactly one generation call", len(calls), 1)
@@ -72,7 +76,8 @@ try:
     check_true("does not mutate the global GEN_OPTIONS",
                brain.GEN_OPTIONS.get("temperature") != 0.0
                or "BRAIN_TEMPERATURE" in os.environ)
-    check("global num_predict untouched", brain.GEN_OPTIONS["num_predict"], 640)
+    check("global num_predict untouched", brain.GEN_OPTIONS["num_predict"],
+          num_predict_before)
     check_true("uses the fast model, never the 7B",
                calls[0]["model"] != brain.DEEP_MODEL)
     check_true("system prompt asks for an ANSWER, not a question",
