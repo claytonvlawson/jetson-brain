@@ -384,6 +384,13 @@ DeafMonitor and Rogers 2013; bilingual_bimodal_h swapped Li Bain Steinberg
 exactly what was asked (no SLR/ML/blockchain chunk can reach the advisor
 now), retrieval gained a row and lost none, and the judged set is unchanged.
 
+DEPLOYED to the Jetson 15:10 EDT (commit 4bb44b0): DEPLOY OK, all three
+services restarted by deploy.sh, `/health` 3,416 chunks, device pickle 3,402
+tagged (computer-vision 327), brain.py / build_index.py / test_index_tags.py
+md5-identical to the Mac, all 25 `test_*.py` PASS on the device. Live check
+via brain_web `POST /ask` with the asl_full_language_h question: context now
+carries Chamberlain Mayberry 2008 instead of Albanie 2020 BSL-1K.
+
 Lost with the previous session: the queued dense-exclude and `--mode scholar`
 heldout arms died with the session (0-byte JSONs, no answers). Dense-exclude
 is superseded by the scope mask; the scholar arm was never run.
