@@ -641,8 +641,11 @@ _RERANK_ENABLED = _env_flag("BRAIN_RERANK", "1")
 # an un-embedded index (and the A/B baseline) behaves precisely as before. The
 # env gate lets one dense index be measured both ways: BRAIN_HYBRID=0 vs =1.
 HYBRID_ENABLED = _env_flag("BRAIN_HYBRID", "1")
-RRF_K = 60          # standard RRF damping constant; larger flattens rank weighting
-RRF_POOL = 60       # fuse this many top docs from each ranker
+# BRAIN_RRF_K / BRAIN_RRF_POOL override both (A/B knobs; defaults unchanged).
+# (_env_int's default clamp of 64 is for context-window knobs; these two are
+# not window sizes, so they get their own bounds.)
+RRF_K = _env_int("BRAIN_RRF_K", 60, 1, 1000)        # RRF damping constant; smaller sharpens the top ranks
+RRF_POOL = _env_int("BRAIN_RRF_POOL", 60, 10, 500)  # fuse this many top docs from each ranker
 DENSE_TIMEOUT = 30  # query-embed timeout (the doc vectors are prebuilt)
 
 # ---- HyDE: retrieve with a hypothetical ANSWER, not the question -----------

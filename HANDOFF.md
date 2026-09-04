@@ -231,6 +231,32 @@ written against the old vault, and the default persona has no per-source
 cap. Score files: the session scratchpad `ret_*.json`; regenerate with the
 "Verify" command and `--gold retrieval_gold.jsonl`.
 
+### What moved it: the RRF damping constant (`BRAIN_RRF_K`, was hardcoded 60)
+
+Levers that did NOT move in_context on the new index: `BRAIN_MAX_PER_SOURCE`
+2 or 3 (breadth only), `BRAIN_TITLE_BOOST` 2 or 4 (+1 / 0), `BRAIN_RRF_POOL`
+120 or 200 (0). The RRF constant did, on `retrieval_gold` (40 rows, new index):
+
+| RRF_K | HyDE off: in_ctx / MRR / @1 | HyDE on (production): in_ctx / MRR / @1 |
+|---|---|---|
+| 60 (default) | 24 / 0.502 / 17 | 27 / 0.529 / 17 |
+| 20 | 26 / 0.512 / 17 | 29 / 0.559 / 18 |
+| 10 | 27 / 0.505 / 16 | **30 / 0.571 / 18** |
+| 5 | 28 / 0.489 / 15 | not run |
+| 3 | 28 / 0.467 / 13 | not run |
+
+Below 10 the recall gain comes out of rank-1 precision, and the 3B answers
+from the first snippet, so 10 is the floor. On the OLD index K=10 is
+neutral-to-better (33/40 either way, MRR 0.644 -> 0.650). Judged gate before
+changing the default: `heldout_gold` (14 q, must_cover) at K=60 vs K=10,
+answers in `eval_results/rrfk{60,10}_heldout_answers.jsonl`.
+
+Gotcha found on the way: `_env_int` clamps to 64 by default (it was written
+for context-window knobs), so `BRAIN_RRF_POOL=200` silently became 64 until
+the knob got its own bounds. And zsh does not word-split `set -- $pair`, so
+a two-value sweep loop silently ran every arm at the defaults; use
+`while read k p`.
+
 ## Related
 
 - `PARENT-SAFETY-FINDING.md` (original 2026-08-27 crisis finding).
