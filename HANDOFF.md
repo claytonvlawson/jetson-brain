@@ -304,13 +304,29 @@ produces". The 3B answered the question; the rubric wanted the whole note.
 Chasing those with a breadth instruction is the round-5-to-9 trap from the
 parent set (it reshuffles which fact drops).
 
-The default persona (what `advisor_server.py` and brain_web use) has NO
+The default persona (what `advisor_server.py` and brain_web use) had NO
 scope: `FOLDER_BOOST` fires only when the query names a folder;
 `PARENT_BOOST` / `SCHOLAR_BOOST` are persona-only; `BRAIN_DENSE_EXCLUDE`
-is env-only. Next experiment queued: the same judged run under
-`--mode scholar` (existing `_SCHOLAR_SOURCE_PREFIXES` boost, keep_k 10,
-per-source cap 2) to see whether the existing scope mechanism recovers it
-before any new boost table is written.
+is env-only and dense-only.
+
+### Default-persona folder scope (commit 92ed202, Clayton's call 13:25)
+
+`_DEFAULT_EXCLUDE_PREFIXES` in brain.py (Blockchain, Research, Publishing,
+Datasets, Vendor-Evaluations, Conferences, Projects, Inbox, 00-Home,
+Sources/Sign Language AI and Ethics, ENVIRONMENT.md, README.md).
+`_default_scope_excluded()` turns it into a chunk-id set for the default
+persona only; `_mask_scores()` sets those ids to 0 on BM25 and -inf on the
+dense and HyDE rankers, and the sub-question rankings skip them, so all
+rankers agree. Yields to a query that names an excluded folder (same
+folder-token match as FOLDER_BOOST). Mode tag `+scope`. Knobs:
+`BRAIN_DEFAULT_SCOPE=0` off, `BRAIN_DEFAULT_EXCLUDE` replaces the list.
+`test_default_scope.py` (offline, in the deploy manifest).
+
+Retrieval sanity, retrieval_gold, HyDE off: scope on 24/40 MRR 0.505,
+recall@8 27, found 38; off 24/40 MRR 0.502, recall@8 25, found 37. No row
+lost rank. Judged gate queued: `eval_results/scope_k60_heldout_answers.jsonl`
+against the 52.1 baseline; two other arms run first (`--mode scholar`, and
+`BRAIN_DENSE_EXCLUDE` of the same folders on the dense arm only).
 
 Trap: every dense scoring call on this Mac logs numpy "divide by zero /
 overflow / invalid value encountered in matmul". It is SPURIOUS: numpy 1.26
