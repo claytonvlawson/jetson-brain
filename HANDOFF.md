@@ -295,6 +295,15 @@ Reviews 304 chunks (mixed: Deaf adolescent well-being papers next to SANet
 and pose-transformer SLR papers), Sources/Sign Language AI and Ethics 148,
 Blockchain 118, Research/JetFuel 57, Datasets 41, Publishing 23.
 
+The 12 "in-context but unused" facts are mostly the rubric asking for
+breadth the question did not: `gallaudet_h` asks which university, what
+the protest was about, and why it matters; the answer covers all three
+correctly, and the three facts marked missing are the 1864 charter, the
+languages of instruction, and "what a fully accessible environment
+produces". The 3B answered the question; the rubric wanted the whole note.
+Chasing those with a breadth instruction is the round-5-to-9 trap from the
+parent set (it reshuffles which fact drops).
+
 The default persona (what `advisor_server.py` and brain_web use) has NO
 scope: `FOLDER_BOOST` fires only when the query names a folder;
 `PARENT_BOOST` / `SCHOLAR_BOOST` are persona-only; `BRAIN_DENSE_EXCLUDE`
