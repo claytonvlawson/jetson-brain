@@ -262,6 +262,18 @@ semantic cache (`served_by=semantic`, all 14), and the Aug-13 gold_questions
 94.9 used the 3B as its own judge. The comparison is the same command on
 the OLD index (`eval_results/oldidx_k60_heldout_answers.jsonl`).
 
+### RETRACTION: the rebuilt index did not regress answers, it improved them
+
+Same command, OLD index (`index-mac/`, 276 notes): **mean 45.8, 0/14.**
+New index: **52.1, 0/14.** Per question new vs old: deaf_gain 80/40,
+crpd 67/17, asl_full 50/33, legal 83/67, interpreting 50/33, deaf_world
+83/67 (better on 6); maryland_school 33/67, transmission 17/33, audism
+33/50 (worse on 3); five tied. So the retrieval_gold drop (33 -> 24) was
+old-label recovery, not answer quality, and the rebuilt index with the nomic
+dense block is the better index. What is true is that the scholar heldout
+set sits near 50 with a 7B judge and RAG-only on EITHER index; it never
+scored 98.8 under RAG, that was the semantic cache.
+
 ### Fact-by-fact diagnosis of the 40 missing heldout facts (K=60, new index)
 
 Offline: for each `must_cover` fact, the best-overlapping chunk among the 8
