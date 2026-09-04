@@ -2066,6 +2066,15 @@ def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
         if mat is not None:
             import numpy as np
             qa = np.array(qv, dtype=np.float32)
+            # Ollama can hand back a NaN/inf vector (seen with nomic-embed-text
+            # under concurrent load; float32 also overflows a huge value to
+            # inf). Fed to the matmul that yields NaN cosines, the dense arm
+            # then ranks by NaN with only a numpy RuntimeWarning to show for
+            # it. Treat it like a failed embed: BM25 carries the query.
+            if not np.isfinite(qa).all():
+                sys.stderr.write("[dense] non-finite query vector from the "
+                                 "embedder; BM25 carries this question\n")
+                return None
             rows = None
             # ANN path: restrict scoring to the post-filtered candidates in the
             # query's nearest IVF cells. Only above ANN_MIN_DOCS, where a coarse

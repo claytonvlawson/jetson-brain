@@ -65,6 +65,30 @@ agree = all(
     for a, b in zip(s, s_py))
 check("pure-python dense scores match numpy path", agree)
 
+# ---- _dense_scores with a NaN/inf query vector -------------------------------
+# Ollama can return a non-finite embedding (nomic-embed-text under concurrent
+# load). Fed to the matmul that ranks the dense arm by NaN with only a numpy
+# RuntimeWarning to show for it. The scorer must treat it as a failed embed
+# (None -> BM25 carries the query), and must not emit the warning.
+import warnings
+import semantic_cache
+_real_embed = semantic_cache._embed
+try:
+    semantic_cache._embed = lambda text, host, model, timeout: [float("nan")] * DIM
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        try:
+            s_nan = brain._dense_scores("q", chunks, {"dense": dm})
+            warned = False
+        except RuntimeWarning:
+            s_nan, warned = "warned", True
+    check("_dense_scores NaN query -> None (BM25 carries it)", s_nan is None)
+    check("_dense_scores NaN query raises no RuntimeWarning", not warned)
+    semantic_cache._embed = lambda text, host, model, timeout: [float("inf")] + [0.0] * (DIM - 1)
+    check("_dense_scores inf query -> None", brain._dense_scores("q", chunks, {"dense": dm}) is None)
+finally:
+    semantic_cache._embed = _real_embed
+
 # ---- _rrf_fuse ---------------------------------------------------------------
 # bm25 likes 3 then 1; dense likes 0 then 1. id1 agreed by both -> should win.
 fused = brain._rrf_fuse([[3, 1], [0, 1]])
