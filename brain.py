@@ -1094,6 +1094,77 @@ MULTI_MAX_PER_SOURCE = _env_int("BRAIN_MULTI_MAX_PER_SOURCE", 2)
 # dropping chunks -- so freeing repeat slots is the only remaining lever.
 DEFAULT_MAX_PER_SOURCE = _env_int("BRAIN_MAX_PER_SOURCE", 0)
 
+# ---- Default-persona folder scope --------------------------------------------
+# The rebuilt index (574 notes) carries folders the language-deprivation agent
+# has no use for and the Aug-13 index barely had: Blockchain (118 chunks),
+# Research/JetFuel (57), Datasets, Publishing, Vendor-Evaluations, and the
+# sign-language-recognition AI literature. Measured on heldout_gold (2026-09-04,
+# 7B judge): 22 of 40 missing facts sat in vault notes that never reached
+# context, and SLR pose-transformer papers reached context on audism and
+# legal-recognition questions. The parent and scholar personas already carry
+# prefix boosts; the default persona (advisor_server, brain_web) had no scope.
+#
+# This is a MASK, not a boost: for the default persona, chunks under these
+# prefixes score 0 on BM25 and -inf on the dense and HyDE rankers, so they
+# leave every pool at once and no sub-question ranking can re-admit them. It
+# yields to the query: a question that names an excluded top-level folder
+# ("what did the blockchain vendor evaluation say") keeps that folder, the
+# same folder-token match FOLDER_BOOST uses. Parent and scholar are untouched.
+# BRAIN_DEFAULT_SCOPE=0 turns it off; BRAIN_DEFAULT_EXCLUDE replaces the list.
+DEFAULT_SCOPE_ENABLED = _env_flag("BRAIN_DEFAULT_SCOPE", "1")
+_DEFAULT_EXCLUDE_PREFIXES = _prefix_tuple(os.environ.get("BRAIN_DEFAULT_EXCLUDE")) or (
+    "Blockchain/",
+    "Research/",
+    "Publishing/",
+    "Datasets/",
+    "Vendor-Evaluations/",
+    "Conferences/",
+    "Projects/",
+    "Inbox/",
+    "00-Home/",
+    "Sources/Sign Language AI and Ethics/",
+    "ENVIRONMENT.md",
+    "README.md",
+)
+
+
+def _default_scope_excluded(chunks, qtok, persona):
+    """Chunk ids the default persona must not retrieve, or an empty set.
+
+    Empty for every other persona, when the scope is off, and for every prefix
+    whose top-level folder the query names (so the scope never hides a note
+    the user asked for by folder)."""
+    if persona != "default" or not DEFAULT_SCOPE_ENABLED or not _DEFAULT_EXCLUDE_PREFIXES:
+        return set()
+    qset = set(qtok or ())
+    live = []
+    for p in _DEFAULT_EXCLUDE_PREFIXES:
+        top = p.split("/", 1)[0]
+        ftok = _FOLDER_TOKENS.get(top)
+        if ftok is None:
+            ftok = set(tokenize(top))
+            _FOLDER_TOKENS[top] = ftok
+        if ftok & qset:
+            continue          # the query names this folder: keep it
+        live.append(p)
+    if not live:
+        return set()
+    live = tuple(live)
+    return {i for i, c in enumerate(chunks)
+            if str(c.get("source") or "").startswith(live)}
+
+
+def _mask_scores(scores, excluded, floor):
+    """Return scores with every excluded id set to `floor` (0.0 for BM25, -inf
+    for cosine rankers). The same object comes back when nothing is excluded."""
+    if not excluded or not len(scores):
+        return scores
+    out = list(scores)
+    for i in excluded:
+        if i < len(out):
+            out[i] = floor
+    return out
+
 # Per-source cap that applies ONLY to machine-fetched web notes, on every
 # persona including the default one. It exists because the two caps above are
 # both inert by default: DEFAULT_MAX_PER_SOURCE is 0, so nothing bounds a
@@ -4371,6 +4442,12 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                                      _REFERENCE_SOURCE_PREFIXES,
                                      DEFAULT_ANALYTIC_BOOST)
 
+    # Default-persona folder scope (see _DEFAULT_EXCLUDE_PREFIXES). Applied to
+    # every ranker below: BM25 here, the sub-question rankings, and the dense
+    # and HyDE cosines where they are computed.
+    excluded = _default_scope_excluded(chunks, qtok, persona)
+    scores = _mask_scores(scores, excluded, 0.0)
+
     # Per-sub-question BM25 rankings, fused with the whole-question ranking
     # below so a chunk answering ANY one part well can reach the context window.
     sub_rankings = []
@@ -4384,7 +4461,8 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                 continue
             sub_rankings.append(
                 [i for i in sorted(range(len(chunks)), key=lambda i: s[i],
-                                   reverse=True) if s[i] > 0][:RRF_POOL])
+                                   reverse=True)
+                 if s[i] > 0 and i not in excluded][:RRF_POOL])
     tm["bm25"] = time.perf_counter() - _t
     tm["subq"] = len(sub_rankings)
 
@@ -4422,6 +4500,7 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                                    qvec_model=qvec_model)
             tm["dense"] = time.perf_counter() - _t
             if dscore is not None:
+                dscore = _mask_scores(dscore, excluded, float("-inf"))
                 dense_ranked = sorted(range(len(chunks)),
                                       key=lambda i: dscore[i], reverse=True)
                 # Lexical side contributes only positive-BM25 docs; dense side
@@ -4440,6 +4519,7 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                 if _hyde_on:
                     hscore = _hyde_scores(question, chunks, meta, tm)
                     if hscore is not None:
+                        hscore = _mask_scores(hscore, excluded, float("-inf"))
                         hyde_ranked = sorted(range(len(chunks)),
                                              key=lambda i: hscore[i], reverse=True)
                         pools.append([i for i in hyde_ranked
@@ -4510,6 +4590,8 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
     # Pinned chunks go to the FRONT whether or not ranking already had them:
     # a chunk that ranked 7th is one the 3B model answers past. Order is
     # crisis, then scope routes, then the ranked context minus duplicates.
+    if excluded:
+        mode = (mode or "") + "+scope"
     pinned = []
     if _is_crisis_question(question):
         pinned.extend(_crisis_chunks(meta))
