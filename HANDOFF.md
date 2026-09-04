@@ -251,6 +251,16 @@ neutral-to-better (33/40 either way, MRR 0.644 -> 0.650). Judged gate before
 changing the default: `heldout_gold` (14 q, must_cover) at K=60 vs K=10,
 answers in `eval_results/rrfk{60,10}_heldout_answers.jsonl`.
 
+Trap: every dense scoring call on this Mac logs numpy "divide by zero /
+overflow / invalid value encountered in matmul". It is SPURIOUS: numpy 1.26
+with Apple's Accelerate BLAS raises FP flags on a clean unit-norm product
+(sims finite, within 1e-7 of an elementwise reference, einsum silent). It
+is not the embedder and not the index. Commit aef3b95 blamed Ollama; the
+follow-up commit corrects that, wraps the matmuls in `np.errstate(ignore)`,
+and guards the RESULT (`_finite_or_neg_inf`). Under `-W error` the old code
+silently fell back to all-BM25 for every question, so never run an eval with
+warnings-as-errors and trust the mode tag.
+
 Gotcha found on the way: `_env_int` clamps to 64 by default (it was written
 for context-window knobs), so `BRAIN_RRF_POOL=200` silently became 64 until
 the knob got its own bounds. And zsh does not word-split `set -- $pair`, so

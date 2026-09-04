@@ -2018,6 +2018,18 @@ def _query_prefix(dense_meta):
         return ""
 
 
+
+def _finite_or_neg_inf(sims):
+    """Any non-finite cosine becomes -inf so that row sinks out of the dense
+    pool instead of poisoning the sort. Cheap (one pass over n floats) and the
+    only guard that actually looks at the numbers the ranking will use."""
+    import numpy as np
+    bad = ~np.isfinite(sims)
+    if bad.any():
+        sims = sims.copy()
+        sims[bad] = float("-inf")
+    return sims
+
 def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
                   qvec_model=None):
     """Global embedding-cosine score per chunk INDEX for hybrid retrieval.
@@ -2066,11 +2078,10 @@ def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
         if mat is not None:
             import numpy as np
             qa = np.array(qv, dtype=np.float32)
-            # Ollama can hand back a NaN/inf vector (seen with nomic-embed-text
-            # under concurrent load; float32 also overflows a huge value to
-            # inf). Fed to the matmul that yields NaN cosines, the dense arm
-            # then ranks by NaN with only a numpy RuntimeWarning to show for
-            # it. Treat it like a failed embed: BM25 carries the query.
+            # A NaN/inf query vector (a bad embedder reply, or float32
+            # overflowing a huge value) would make every cosine NaN and the
+            # dense arm would rank by NaN. Treat it like a failed embed: BM25
+            # carries the query.
             if not np.isfinite(qa).all():
                 sys.stderr.write("[dense] non-finite query vector from the "
                                  "embedder; BM25 carries this question\n")
@@ -2093,7 +2104,8 @@ def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
                 # means dense contributes nothing this query and BM25 carries it.
                 if rows:
                     cr = np.asarray(sorted(set(rows)), dtype=np.int64)
-                    sims = mat[cr] @ qa
+                    with np.errstate(all="ignore"):   # see the full-scan note
+                        sims = _finite_or_neg_inf(mat[cr] @ qa)
                     for j in range(cr.shape[0]):
                         ci = rows_idx[int(cr[j])]
                         if ci >= 0:
@@ -2101,7 +2113,16 @@ def _dense_scores(question, chunks, meta, predicate=None, qvec=None,
             else:
                 # Exact full scan (default). Honor the non-indexed post-filter here
                 # too, so a filter behaves the same with ANN off as with it on.
-                sims = mat @ qa                           # (n,) cosine per row
+                # errstate: numpy on macOS arm64 (1.26, Accelerate BLAS) raises
+                # spurious "divide by zero / overflow / invalid value in matmul"
+                # flags on a clean unit-norm product (verified: results finite
+                # and within 1e-7 of an elementwise reference; einsum on the
+                # same data is silent). Left alone they are noise in every
+                # eval log, and under -W error they turned into a silent
+                # all-BM25 fallback. The real protection is the finiteness
+                # check on the RESULT below, not the flags.
+                with np.errstate(all="ignore"):
+                    sims = _finite_or_neg_inf(mat @ qa)   # (n,) cosine per row
                 for r in range(n):
                     ci = rows_idx[r]
                     if ci < 0:
