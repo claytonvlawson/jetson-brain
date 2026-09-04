@@ -1683,7 +1683,13 @@ _TITLE_TOKENS = {}
 # being long, carry it several times over. Measured, they buried the actual
 # Gallaudet note. Title matching is the field weight that separates "the note
 # ABOUT X" from "a note that MENTIONS X".
-TITLE_BOOST = 1.0
+# BRAIN_TITLE_BOOST overrides (A/B knob; 0 disables). Inline os.environ on
+# purpose: _env_int/_env_float are fine here (defined above) but a float
+# with a clamp reads clearer than a helper that rounds.
+try:
+    TITLE_BOOST = max(0.0, min(10.0, float(os.environ.get("BRAIN_TITLE_BOOST") or 1.0)))
+except ValueError:
+    TITLE_BOOST = 1.0
 
 
 def _title_tokens(title):

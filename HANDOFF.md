@@ -206,11 +206,30 @@ the pinned 3B. Re-grade saved answers without generating:
 | Mac | this tree | `index-mac-v2/bm25.pkl`, 3,386 chunks | eval numbers above |
 | Jetson `/mnt/nvme/brain` | md5-identical `brain.py`, `brain_ui.py`, `build_index.py`, `test_crisis_trigger.py` | `index/bm25.pkl`, 3,416 chunks (11:35 EDT) | 30 more chunks than the Mac: the device vault sync includes notes the Mac eval index excluded |
 
-`deploy.sh` skips the service restarts (no passwordless sudo), so after any
-deploy run on the device: `sudo systemctl restart advisor.service
-brain-web.service brain-ollama-shim.service`. `brain_web.py` and the shim
-reload a changed index on their own but keep the old `brain.py` in memory;
-`advisor_server.py` reloads neither.
+`deploy.sh` now restarts the three services itself (commit f73a460): the
+device has a SCOPED passwordless rule, `/etc/sudoers.d/brain-deploy`, for
+exactly `/usr/bin/systemctl restart advisor|brain-web|brain-ollama-shim`
+(no `.service` suffix). The old gate tested `sudo -n true`, which that rule
+does not cover, so every deploy printed SKIPPED. Proven 12:10 EDT: a full
+`JETSON=jetson ./deploy.sh` rebuilt the index and restarted all three with
+no prompt. `brain_web.py` and the shim reload a changed index on their own
+but keep the old `brain.py` in memory; `advisor_server.py` reloads neither.
+
+## Retrieval regression found after deploy (2026-09-04, open)
+
+The rebuilt index is 574 notes / 3,386 chunks (Mac) against the Aug-13
+index's 276 notes / 1,545. `Sources/` went 464 -> 1,752 chunks. On
+`retrieval_gold.jsonl` (scholar-shaped, default persona) with identical flags
+(HyDE off, hybrid on) the old index scores in_context 33/40, MRR 0.64; the new
+one 24/40, MRR 0.50. With HyDE on (production) the new index is 27/40,
+MRR 0.53, found-anywhere 40/40; the Aug-27 seeded baseline on the old index
+was 32/40. All nine lost rows show the expected note sinking from rank 1-6 to
+7-25 behind NEW paper notes that are topically on point (Ma et al 2022 took
+four of eight slots on deaf_identity_audism_1; `DEFAULT_MAX_PER_SOURCE` is 0
+for the default persona). Two things are true at once: the labels were
+written against the old vault, and the default persona has no per-source
+cap. Score files: the session scratchpad `ret_*.json`; regenerate with the
+"Verify" command and `--gold retrieval_gold.jsonl`.
 
 ## Related
 
