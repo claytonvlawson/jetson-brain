@@ -262,6 +262,35 @@ semantic cache (`served_by=semantic`, all 14), and the Aug-13 gold_questions
 94.9 used the 3B as its own judge. The comparison is the same command on
 the OLD index (`eval_results/oldidx_k60_heldout_answers.jsonl`).
 
+### Fact-by-fact diagnosis of the 40 missing heldout facts (K=60, new index)
+
+Offline: for each `must_cover` fact, the best-overlapping chunk among the 8
+retrieved vs among all 3,386 (content-word overlap, 0.5 = "present").
+**22 facts are VAULT-ONLY (retrieval missed the chunk that holds them), 12
+are IN-CONTEXT but unused by the 3B, 6 are nowhere.** So retrieval is the
+larger problem, the opposite of the parent set, where everything was in
+context and only order mattered.
+
+Where the vault-only facts live: the synthesized notes (`Deaf Gain.md` 0.93,
+`Maryland School for the Deaf.md` 0.88, `Harlan Lane.md` 0.91, `Gulati 2018`
+0.90, `Robbin Battison.md` 0.85, `Ma et al 2022` 0.89). What reached
+context instead (130 slots over 14 answers): Concepts 27, top-level
+`Sources/` 24 (including sign-language-recognition ML papers such as
+Albanie 2020 BSL-1K), Sources/Language Deprivation 12, Core 12, People 10,
+Thesis 7, Thesis/Literature Reviews 6. The rebuilt index carries folders
+the LD agent has no use for and the old index barely had: Thesis/Literature
+Reviews 304 chunks (mixed: Deaf adolescent well-being papers next to SANet
+and pose-transformer SLR papers), Sources/Sign Language AI and Ethics 148,
+Blockchain 118, Research/JetFuel 57, Datasets 41, Publishing 23.
+
+The default persona (what `advisor_server.py` and brain_web use) has NO
+scope: `FOLDER_BOOST` fires only when the query names a folder;
+`PARENT_BOOST` / `SCHOLAR_BOOST` are persona-only; `BRAIN_DENSE_EXCLUDE`
+is env-only. Next experiment queued: the same judged run under
+`--mode scholar` (existing `_SCHOLAR_SOURCE_PREFIXES` boost, keep_k 10,
+per-source cap 2) to see whether the existing scope mechanism recovers it
+before any new boost table is written.
+
 Trap: every dense scoring call on this Mac logs numpy "divide by zero /
 overflow / invalid value encountered in matmul". It is SPURIOUS: numpy 1.26
 with Apple's Accelerate BLAS raises FP flags on a clean unit-norm product
