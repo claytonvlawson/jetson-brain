@@ -247,9 +247,20 @@ Levers that did NOT move in_context on the new index: `BRAIN_MAX_PER_SOURCE`
 
 Below 10 the recall gain comes out of rank-1 precision, and the 3B answers
 from the first snippet, so 10 is the floor. On the OLD index K=10 is
-neutral-to-better (33/40 either way, MRR 0.644 -> 0.650). Judged gate before
-changing the default: `heldout_gold` (14 q, must_cover) at K=60 vs K=10,
-answers in `eval_results/rrfk{60,10}_heldout_answers.jsonl`.
+neutral-to-better (33/40 either way, MRR 0.644 -> 0.650).
+
+**Judged gate (heldout_gold, 14 q, 3B answerer, qwen2.5:7b judge, seed 42,
+no cache, new index): K=60 mean 52.1, 0/14; K=10 mean 46.1, 0/14.** K=10
+is worse on 8 of 14 questions (deaf_world_visual 83 -> 33, legal 83 -> 67,
+language_deprivation 67 -> 50) and better on 3. Verdict: **RRF_K stays 60.**
+The retrieval_gold gain was recovery of notes labeled against the old
+vault, and recovering them displaced context the answers were using.
+Answers: `eval_results/rrfk{60,10}_heldout_answers.jsonl`.
+
+The 52.1 itself has no fair prior: July's heldout 98.8 was served by the
+semantic cache (`served_by=semantic`, all 14), and the Aug-13 gold_questions
+94.9 used the 3B as its own judge. The comparison is the same command on
+the OLD index (`eval_results/oldidx_k60_heldout_answers.jsonl`).
 
 Trap: every dense scoring call on this Mac logs numpy "divide by zero /
 overflow / invalid value encountered in matmul". It is SPURIOUS: numpy 1.26
