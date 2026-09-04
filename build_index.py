@@ -373,10 +373,20 @@ def _crumb_prefix(stem, note_title, crumb):
     return "[" + " > ".join(trail) + "]"
 
 
-def chunk_note(body_no_fm, note_title, stem):
+def chunk_note(body_no_fm, note_title, stem, floor_words=None):
     # Structure-aware chunking for one note. Returns a list of chunk texts, each
     # already carrying its heading breadcrumb. Sections are cleaned of Obsidian
     # syntax here (headings were used for structure and are dropped from bodies).
+    #
+    # floor_words: sections under this many words merge with neighbors
+    # (FLOOR_WORDS by default). A FAQ-type note passes 0 so every question
+    # keeps its own chunk AND its own heading breadcrumb: the Parents FAQ has
+    # 18 sections of 40-75 words, and under the default floor they merged into
+    # 6 chunks whose breadcrumb only carried the first question. "My audiologist
+    # said not to sign" then had no chunk whose injected heading terms matched
+    # it, and the parent_hard battery lost the fact verbatim in the vault.
+    if floor_words is None:
+        floor_words = FLOOR_WORDS
     sections = split_into_sections(body_no_fm)
     if not sections:
         return []
@@ -410,7 +420,7 @@ def chunk_note(body_no_fm, note_title, stem):
 
     for sec in prepared:
         words = sec["words"]
-        if words >= FLOOR_WORDS:
+        if words >= floor_words:
             # Substantial section. Flush any pending small buffer first, folding
             # it into this section when they fit together under the ceiling.
             if buf_words and buf_words + words <= CEIL_WORDS:
@@ -453,7 +463,7 @@ def chunk_note(body_no_fm, note_title, stem):
     # fit under the ceiling; otherwise emit it normally.
     if buf_text:
         body = " ".join(buf_text).strip()
-        if body and buf_words < FLOOR_WORDS and chunks and \
+        if body and buf_words < floor_words and chunks and \
                 len(chunks[-1].split()) + buf_words <= CEIL_WORDS:
             chunks[-1] = chunks[-1].rstrip() + " " + body
         else:
@@ -696,7 +706,11 @@ def build_note_chunks(body_no_fm, frontmatter, title, fallback_title, meta):
     card is chunk_texts[0]; callers flag that chunk so retrieval can prefer it
     for fact-seeking questions (see brain._apply_card_boost)."""
     fm_fields = parse_frontmatter_fields(frontmatter)
-    chunk_texts = list(chunk_note(body_no_fm, title, fallback_title))
+    # type: faq notes are one question per section; never merge them (see
+    # chunk_note). Read from the parsed frontmatter so update_index inherits it.
+    is_faq = str(fm_fields.get("type") or "").strip().lower() == "faq"
+    chunk_texts = list(chunk_note(body_no_fm, title, fallback_title,
+                                  floor_words=0 if is_faq else None))
 
     # apply_meta with meta="inline" appends to chunk_texts[0], so the card must
     # be inserted AFTER that call or the meta sentence lands on the card (which

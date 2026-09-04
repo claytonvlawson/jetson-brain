@@ -234,7 +234,7 @@ class UI:
             return 24
 
     # -- welcome banner ---------------------------------------------------
-    def welcome(self, model, chunk_count, cache_entries, vault_name, cache_dir):
+    def welcome(self, model, chunk_count, cache_entries, vault_name, cache_dir, user_name="there"):
         p, box = self.p, self.box
         # Two-column width: left info box + right tips box, matching Claude Code.
         left_inner = 36
@@ -258,7 +258,7 @@ class UI:
         # Left column content.
         left_lines = [lpad("", left_inner)]
         left_lines.append(lpad(
-            "  " + self.c("Welcome back, Clayton!", p.ACCENT, p.BOLD),
+            "  " + self.c("Welcome back, %s!" % user_name, p.ACCENT, p.BOLD),
             left_inner))
         left_lines.append(lpad("", left_inner))
         for rline in robot:

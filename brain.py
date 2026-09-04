@@ -132,7 +132,11 @@ DEEP_MODEL = "qwen2.5:7b"
 # Generation options threaded into every Ollama chat call: bounded output +
 # context window and a low temperature for grounded answers.
 GEN_OPTIONS = {
-    "num_predict":    640,   # was 200, then 512 — room for fuller, fact-complete answers
+    # was 200, then 512, then 640, now 800 (2026-09-04): the routed parent
+    # answers run 3,000+ chars and four of fifteen hit 640 with a rubric fact
+    # still unsaid; at 800 parent_gold went 86.9 -> 94.4 and parent_hard
+    # 90.0 -> 91.7 with nothing else changed. BRAIN_NUM_PREDICT overrides.
+    "num_predict":    max(64, min(2048, int(os.environ.get("BRAIN_NUM_PREDICT") or 800))),
     "num_ctx":      24576,   # 3072 -> 4096 -> 6144 -> 8192 -> here; see the table below
     "temperature":    0.2,   # tighter citation adherence; BRAIN_TEMPERATURE overrides
     "repeat_penalty": 1.1,   # prevent looping on long outputs
@@ -410,6 +414,9 @@ FOLDER_BOOST = 4.0
 # academic sources that share more query words. Applied to BM25 scores before
 # fusion/rerank, so both retrieval paths inherit it.
 PARENT_BOOST = 3.0
+# Cross-reference: LanguageDeprivationAgent/.ragconfig.yaml audience_routing.parent
+# (boost/include/tone) describes the same intent. brain.py is the source of
+# truth; the yaml is not read at runtime and is not a second boost table.
 _PARENT_SOURCE_PREFIXES = (
     "LanguageDeprivationAgent/Parent Guidance/",
     "LanguageDeprivationAgent/Parents FAQ",
@@ -434,6 +441,75 @@ PARENT_TOP_K = _env_int("BRAIN_PARENT_TOP_K", 8)
 # still forces at least three distinct source notes into context.
 PARENT_MAX_PER_SOURCE = _env_int("BRAIN_PARENT_MAX_PER_SOURCE", 3)
 
+# ---- Crisis trigger (all personas) ----------------------------------------
+# Ported and WIDENED from LanguageDeprivationAgent/.ragconfig.yaml
+# safety.crisis_triggers. The yaml's list (suicide, self-harm, kill myself,
+# abuse, not safe) misses the parent-worded question that motivated this:
+# "he wrote that he wishes he had never been born. I am scared and I do not
+# know what to do tonight." BM25/dense find no overlap between that wording and
+# the vault's crisis chunk ("988", "self-harm"), so the guardrails note scored
+# 16-24 boosted against Gulati's 64-78 and never reached context
+# (PARENT-SAFETY-FINDING.md). This is a separate, deterministic, keyword-only
+# force-inject that runs regardless of score and regardless of persona; it
+# coexists with _apply_parent_boost rather than replacing it. Pure regex, no
+# model call, so it is offline-testable (test_crisis_trigger.py).
+CRISIS_SOURCE = "LanguageDeprivationAgent/01 Agent Scope and Guardrails.md"
+
+_CRISIS_DIRECT_TERMS = tuple(re.compile(p, re.I) for p in (
+    r"\bsuicid(e|al)\b",
+    r"\bself[- ]harm",
+    r"\bkill (myself|himself|herself|themselves|yourself)\b",
+    # Accepted false positive: "abuse of power" also fires. Over-triggering only
+    # adds the guardrails chunk to context; it never produces a wrong answer.
+    r"\babused?\b",
+    r"\bnot safe\b",
+    r"\bcutting (himself|herself|myself|themselves)\b",
+))
+_CRISIS_INDIRECT_PATTERNS = tuple(re.compile(p, re.I) for p in (
+    r"\bwish(es|ed)? (he|she|they|i) (had|were|was) never (been )?born\b",
+    r"\b(doesn'?t|does not|don'?t|do not) want to (be here|live|be alive)\b",
+    r"\bwants? to (die|disappear|end it)\b",
+    r"\bgive up on (life|living)\b",
+    r"\bhurt (himself|herself|myself|themselves)\b",
+    r"\bbetter off dead\b",
+    r"\bno reason to live\b",
+    r"\bend (his|her|their|my) (own )?life\b",
+))
+# A fear word ALONE does not trigger ("scared about the surgery next month");
+# only fear paired with immediacy does. "tomorrow" is deliberately absent.
+_CRISIS_FEAR_WORDS = re.compile(r"\b(scared|terrified|panicking|afraid)\b", re.I)
+_CRISIS_URGENCY_WORDS = re.compile(
+    r"\b(tonight|right now|do not know what to do|don'?t know what to do"
+    r"|might hurt|he might|she might|they might)\b", re.I)
+
+
+def _is_crisis_question(question):
+    """True when the question is crisis-adjacent by vocabulary alone.
+    Deterministic; no model call. See _CRISIS_* above for the three tiers."""
+    q = question or ""
+    if any(p.search(q) for p in _CRISIS_DIRECT_TERMS):
+        return True
+    if any(p.search(q) for p in _CRISIS_INDIRECT_PATTERNS):
+        return True
+    return bool(_CRISIS_FEAR_WORDS.search(q) and _CRISIS_URGENCY_WORDS.search(q))
+
+
+def _crisis_chunks(meta):
+    """Every indexed chunk of CRISIS_SOURCE, in note order. [] if the note is
+    not in this index (fail-open, same convention as expand_with_links).
+    Never raises."""
+    try:
+        by_source = (meta or {}).get("by_source") or {}
+        by_id = (meta or {}).get("by_id") or {}
+        out = []
+        for cid in by_source.get(CRISIS_SOURCE) or ():
+            c = by_id.get(cid)
+            if c is not None:
+                out.append(c)
+        return out
+    except Exception:
+        return []
+
 # ---- Scholar persona ------------------------------------------------------
 # Third persona alongside default and parent. Its depth comes from RETRIEVAL
 # BREADTH and a bounded second pass, never from prompting: the system prompt is
@@ -448,6 +524,8 @@ PARENT_MAX_PER_SOURCE = _env_int("BRAIN_PARENT_MAX_PER_SOURCE", 3)
 # additive shape, applied to BM25 before fusion/rerank, so both retrieval paths
 # inherit it.
 SCHOLAR_BOOST = 2.0
+# Cross-reference: .ragconfig.yaml audience_routing.researcher / .clinician
+# map loosely onto this list; there is no policymaker persona in brain.py.
 # The four prefixes that hold the language-deprivation literature. Verified
 # against depth_retrieval_gold.jsonl, whose 8 labeled facets resolve entirely
 # into "Sources/Language Deprivation/" and "LanguageDeprivationAgent/Core/".
@@ -2881,6 +2959,575 @@ PARENT_SYSTEM = (
     + PLAIN_VOICE
 )
 
+# Appended to the active system prompt (any persona) only when
+# _is_crisis_question fires. The single crisis chunk in the vault is thin
+# ("Return crisis resources (988, Deaf crisis lines, CPS...)") and does not
+# spell out how 988 is reached, so retrieval alone gets partial credit. This
+# names the reachability as the procedure that snippet directs, which keeps it
+# inside the grounding contract rather than "own memory".
+CRISIS_SYSTEM_ADDENDUM = (
+    "\n\nSAFETY PRIORITY: A snippet from the Agent Scope and Guardrails note is "
+    "included. It takes priority over every other snippet. Lead with it: this "
+    "is not a research question. State plainly that the 988 Suicide and Crisis "
+    "Lifeline is reachable by call, text, or chat, and that Deaf and hard of "
+    "hearing callers can reach it by video relay service (VRS) or by videophone "
+    "through a Deaf crisis line, and that the family should reach a "
+    "Deaf-specialist mental-health provider where one exists, because a "
+    "provider without sign access reproduces the problem. That is the "
+    "procedure the guardrails snippet directs you to give, not outside "
+    "knowledge. If anyone is in immediate danger, say to contact emergency "
+    "services now. Handle this as an urgent safety situation, not as a "
+    "research, advocacy, or placement question: no statistics, no citations "
+    "before the crisis resources, and no blame for past school or "
+    "communication choices. Do not give therapy instructions; the parent's "
+    "job tonight is to stay with the child and reach the crisis line and a "
+    "Deaf-specialist provider. Language access is still the underlying "
+    "issue, so after the safety steps, and only after them, say briefly that "
+    "it will be addressed next, with what the other snippets support. Keep "
+    "it short and warm."
+)
+
+# ---- Scope routes (all personas) ----------------------------------------
+# The crisis trigger above generalized. Port of .ragconfig.yaml
+# safety.medical_decision_triggers / legal_decision_triggers plus the
+# guardrails note's own "Refusal and redirect patterns" table, each widened
+# from the yaml's literal phrases to the way parents actually write. Every
+# route names (a) a regex, (b) the vault chunks to force to the FRONT of
+# context, matched by source and a substring so only the relevant section
+# of a note is pinned, and (c) a short addendum telling the model to lead
+# with that pinned snippet. Retrieval already had these facts in the vault
+# (the whole parent_hard battery grep-verified verbatim); the 3B model only
+# uses them when they come first. See test_crisis_trigger.py.
+_PARENTS_FAQ_SOURCE = "LanguageDeprivationAgent/Parents FAQ.md"
+_NATIONAL_HELP_SOURCE = ("LanguageDeprivationAgent/Parent Guidance/"
+                         "Where to Find Help National Organizations.md")
+_FIRST90_SOURCE = ("LanguageDeprivationAgent/Parent Guidance/"
+                   "First 90 Days After Diagnosis.md")
+_MILESTONES_SOURCE = ("LanguageDeprivationAgent/Parent Guidance/"
+                      "Language Milestones and Warning Signs.md")
+_STARTING_LATE_SOURCE = ("LanguageDeprivationAgent/Parent Guidance/"
+                         "Starting Late Ages 5 and Up.md")
+
+_ROUTE_ADDENDA = {
+    "medical": (
+        "\n\nSCOPE: The question asks for an individual medical or surgical "
+        "decision (implant candidacy, safety, whether to operate). The "
+        "guardrails snippet says that decision belongs to the implant surgeon "
+        "and audiologist, not to you: decline the yes-or-no plainly and "
+        "without a safety claim about the procedure either way. Then say what "
+        "the snippets do support: the device decision and the language-access "
+        "decision are separate, sign language starts now whichever way the "
+        "device decision goes, and bilingual-bimodal implant users do as well "
+        "as or better than implant-only children. Name Deaf adults with "
+        "implants and the implant center as resources for the family's own "
+        "informed choice."),
+    "legal": (
+        "\n\nSCOPE: The question asks about a specific legal dispute (suing, "
+        "due process, odds of winning). The guardrails snippet says advice on "
+        "a specific case belongs to a special-education attorney, the state "
+        "Client Assistance Program, or a Disability Rights organization: say "
+        "so plainly and do not estimate their chances. Then give what the "
+        "snippets do support about the IEP itself: the parent is a full IEP "
+        "team member with the right to dissent from a proposed placement and "
+        "to request alternatives, and the concrete backup the FAQ lists for "
+        "the next meeting, each by name: a Deaf mentor or Deaf professional "
+        "in the room, an independent language assessment using the ASL-CDI "
+        "or the VCSL, the state disability-rights agency, the LEAD-K state "
+        "chapter, and the written references the FAQ names."),
+    "out_of_area": (
+        "\n\nSCOPE: The family lives outside the DC and Maryland area. Your "
+        "first sentence must say, naming their state, that the local resource "
+        "guides here cover the DC and Maryland area and do not cover that "
+        "state (for example: 'The local guides I have cover DC and Maryland, "
+        "not Nebraska'), so you will give the routes "
+        "that work from anywhere: their state's IDEA Part C early intervention "
+        "program as the first call, their state School for the Deaf and its "
+        "outreach or parent-infant program, whether their state has a LEAD-K "
+        "chapter, and the national organizations in the snippets that serve "
+        "families in every state, naming each one the snippets name (the "
+        "National Association of the Deaf, the Laurent Clerc National Deaf "
+        "Education Center, the National Deaf Center, the American Society for "
+        "Deaf Children) with one line on what it offers. Do not list DC or "
+        "Maryland providers as if they were local to this family."),
+    "mode_choice": (
+        "\n\nSCOPE: The question frames sign language and listening-and-spoken "
+        "language as two equal options to choose between. Lead with the "
+        "guardrails snippet's non-negotiable: the framing is not accurate, the "
+        "evidence supports an and, not an or. Sign language guarantees full "
+        "access from day one with no medical prerequisites, spoken-language "
+        "access is real but conditional on variables the family cannot fully "
+        "predict, and every deaf child needs a full accessible first language "
+        "now while the critical period is open. Do not present the two as "
+        "equally supported and do not dismiss spoken language. End by naming "
+        "the choices that genuinely are the family's to make, which school, "
+        "which implant, which provider, and say you support those with "
+        "information rather than directing them."),
+    "placement": (
+        "\n\nSCOPE: The parent asks you to compare or pick school placements. "
+        "Start your answer with this sentence, word for word: 'Which school "
+        "is your decision and your IEP team's, and I will not pick for you.' "
+        "Then, warmly and at the usual length, give what the FAQ snippet "
+        "says: the honest ranking on language-deprivation risk, Schools for "
+        "the Deaf and strong bilingual-bimodal magnet programs at the top and "
+        "mainstream with an interpreter at the bottom; the options between "
+        "those two, co-enrollment programs and mainstream with direct signing "
+        "instruction; and the test that decides, the placement where the "
+        "child spends the whole day in a language environment they can fully "
+        "access. Named examples from the snippets (the Maryland School for "
+        "the Deaf, the Clerc Center demonstration schools) may be given as "
+        "examples, but never present a DC or Maryland local program as this "
+        "family's own school, and do not argue for either of the parent's "
+        "two schools."),
+    "monolith": (
+        "\n\nSCOPE: The question asks for the single correct Deaf-community "
+        "position. Lead with the guardrails snippet: decline the monolith "
+        "framing, the Deaf community holds a range of views, and name the "
+        "scholars the snippets cite who document that range (Carol Padden, "
+        "Tom Humphries, Maartje De Meulder, Annelies Kusters). Say, from the "
+        "FAQ snippet, that Deaf culture is a documented linguistic and "
+        "cultural community with its own language, history, literature, and "
+        "institutions, a people rather than a political movement. Point the "
+        "family to Deaf-led organizations and to meeting Deaf adults directly "
+        "rather than to any one spokesperson."),
+    "milestones": (
+        "\n\nSCOPE: The parent is comparing their deaf child's milestones to a "
+        "hearing child's and fears a cognitive problem. Lead with the "
+        "milestones snippets: benchmark against bilingual-bimodal milestones, "
+        "not monolingual English ones, using the two instruments the FAQ "
+        "names in full, the ASL-Communicative Development Inventory (ASL-CDI) "
+        "and the Visual Communication and Sign Language Checklist (VCSL), "
+        "both designed for deaf children; when milestones are thin, increase "
+        "fluent-signer exposure before concluding the child is the problem, "
+        "because inadequate exposure is the most common explanation; and thin "
+        "milestones are a reason to act now on language access, this week, "
+        "never a reason to wait and watch. Say yes to an evaluation by a team "
+        "that knows deaf children, alongside the exposure increase, not "
+        "instead of it and not after a waiting period. Do not diagnose the "
+        "child and do not blame the parent."),
+    "late_start": (
+        "\n\nSCOPE: This family started sign language late and is asking about "
+        "damage or blame. Lead with the Starting Late snippets: it is not too "
+        "late; use the snippet's own words: delayed milestones are an "
+        "emergency deserving action now, and immersion in a fluent signing "
+        "environment is the strongest remediation available; the honest "
+        "limits the snippet states about what late "
+        "access can and cannot recover; and that language deprivation is "
+        "usually the unintended outcome of well-intentioned choices made on "
+        "the advice the family was given, so the framing is forward-looking, "
+        "not blaming. Do not quantify damage the snippets do not quantify."),
+    "family_pressure": (
+        "\n\nSCOPE: Relatives are pushing back on signing. Lead with the FAQ "
+        "snippet on family skeptics: the three things to share (the VL2 "
+        "parent-facing brief, Murray, Hall and Snoddon 2019 in the Bulletin of "
+        "the World Health Organization, and an invitation to a Deaf community "
+        "event or a Deaf mentor visit); that printed science plus a lived-"
+        "experience encounter shifts most family skeptics within roughly six "
+        "months, and say that six-month figure in so many words; and that the "
+        "isolation worry runs backwards, because the "
+        "family learning to sign is exactly what keeps the child connected to "
+        "the family. Do not tell the parent to argue with or cut off the "
+        "relatives."),
+    "grief": (
+        "\n\nSCOPE: The parent is grieving or ashamed of grieving. Lead with "
+        "the FAQ snippet on grief: it is normal and expected, not a character "
+        "failure; many hearing parents grieve the hearing baby they expected "
+        "while building a relationship with the deaf baby they have, and both "
+        "feelings coexist; a Deaf mentor or Deaf family often moves the grief "
+        "toward seeing Deaf adulthood as a different, valuable life; and the "
+        "grief typically loosens over roughly six to twelve months and does "
+        "not have to be resolved before starting visible language. Do not "
+        "diagnose the parent, do not say they are grieving wrongly, and do "
+        "not rush to a checklist."),
+    "parent_fluency": (
+        "\n\nSCOPE: The parent doubts they can learn to sign well enough. "
+        "Lead with the FAQ snippet on learning ASL: most hearing parents "
+        "learn ASL alongside their child rather than before, and that is the "
+        "normal path; the goal in the first year is making signing a daily "
+        "habit, not fluency; fluent signers (Deaf mentors, bilingual-bimodal "
+        "early interventionists, Deaf family friends) fill the language-"
+        "quality gap while the parent builds skill; and signing to the child "
+        "starts now, at whatever level the parent has today. Say plainly "
+        "they are not failing."),
+    "stop_signing": (
+        "\n\nSCOPE: The family is asking whether they can stop signing now "
+        "that speech is going well. Lead with the two FAQ snippets: signing "
+        "is not a stage a family exits, functionally it continues into "
+        "adolescence and adulthood; a child who later uses more spoken "
+        "language than sign still carries the benefits, a full first language "
+        "during the critical period, literacy scaffolding, Deaf-community "
+        "access, and resilience if auditory access ever fails, for example "
+        "when a device is off, broken, or in a setting where it does not "
+        "work; and stopping risks language attrition and loses the bilingual-"
+        "bimodal benefit. Acknowledge the chore honestly and suggest lighter "
+        "sustainable ways to keep it, without shaming the family."),
+    "speech_myth": (
+        "\n\nSCOPE: Someone told this family that signing will stop or delay "
+        "speech. Lead with the FAQ snippet on exactly that: current evidence "
+        "does not support the claim; studies, including Petitto's work at VL2 "
+        "and reviews of bilingual-bimodal development, find either no effect "
+        "or a positive effect of early sign on spoken-language outcomes; name "
+        "where the claim comes from (oralist advocacy traditions, AG Bell, "
+        "Milan 1880), not from data; and a full first language during the "
+        "critical period benefits the child whichever language they later "
+        "prefer. Do not moralize at the relative who said it."),
+    "deaf_mentors": (
+        "\n\nSCOPE: The question is about Deaf mentors and Deaf adults. Lead "
+        "with the snippets on why and how: why, because fluent Deaf adults "
+        "fill the language-quality gap while hearing parents are still "
+        "learning ASL, model the language, and are a living example of Deaf "
+        "adulthood for the child and the family; how, because families can "
+        "request Deaf mentor services through early intervention, written "
+        "into the IFSP under IDEA Part C; and, in a short list of concrete "
+        "ways to connect, state Deaf Mentor Programs, Deaf community events "
+        "(name the kinds the snippets name), and the state School for the "
+        "Deaf's family programs. Use the words 'Deaf community events' and "
+        "'Deaf mentor programs'."),
+    "ifsp": (
+        "\n\nSCOPE: The question is about the IFSP. Lead with the IFSP "
+        "snippets: what it is (the written early-intervention plan under IDEA "
+        "Part C for children under three), that it is family-centered and "
+        "differs from the IEP, which begins at age three; what to ask for "
+        "(ASL instruction for the family, a Deaf mentor, providers trained "
+        "with deaf infants, measurable language outcomes, the timeline "
+        "rules the snippets state); and the family's rights in the process, "
+        "including evaluation and the right to disagree with the plan."),
+    "national_orgs": (
+        "\n\nSCOPE: The question asks which national organizations help. "
+        "Name each one the snippets name with one line on what it offers, "
+        "including: the National Association of the Deaf, the oldest US Deaf "
+        "civil-rights organization, which publishes positions relevant to "
+        "deaf children and families; the Laurent Clerc National Deaf "
+        "Education Center at Gallaudet, which offers national family "
+        "resources and runs the KDES and MSSD demonstration schools; the "
+        "National Deaf Center; and the American Society for Deaf Children, "
+        "where the snippets cover them. Also name the public system behind "
+        "them, IDEA Part C early intervention in every state."),
+    "provider_against_sign": (
+        "\n\nSCOPE: A provider told this family not to sign. Lead with the "
+        "FAQ snippet on exactly that: an audiologist's training is in device "
+        "programming, not developmental linguistics, so a recommendation "
+        "against sign is a red flag rather than a clinical finding; seek a "
+        "second opinion from a bilingual-bimodal-literate provider; bring the "
+        "printed sources the snippet names to the next appointment. Say that "
+        "sign language access starts now and does not wait on the "
+        "disagreement, because the critical period does not pause while "
+        "adults argue. If the advice came with a cochlear implant, add from "
+        "the FAQ snippet that an implant gives partial, variable auditory "
+        "access conditional on factors the family cannot predict, not "
+        "guaranteed language access, while sign language guarantees access, "
+        "so the two complement each other. Do not tell them which provider "
+        "to obey, do not treat the disagreement as a real scientific "
+        "controversy, and do not attack the audiologist personally."),
+}
+
+# Appended to every route addendum. The first judged run with routes showed
+# the failure this prevents: parent_ci_no_sign answered the provider-refusal
+# part verbatim from the pinned FAQ chunk and stopped, dropping the implant
+# half of the question (80 -> 20).
+# Round 5 and 7 lesson: "no URLs or citations not in the snippets" cost one
+# NAMED fact per answer (six to twelve months, ASL-CDI and VCSL, Murray, Hall
+# and Snoddon) across routes whose text had not changed, because the 3B
+# reads "no citations" as "drop the named things". Ban invented web links
+# only; named sources from the snippets are exactly what the rubrics want.
+_ROUTE_SUFFIX = (
+    " This scope note covers one part of the question. After it, answer the "
+    "rest of what the parent actually asked, fully, from the other snippets, "
+    "at the usual length and warmth. Do not invent web links.")
+_ROUTE_ADDENDA = {k: v + _ROUTE_SUFFIX for k, v in _ROUTE_ADDENDA.items()}
+
+_IFSP_SOURCE = "Concepts/IFSP and Part C Early Intervention.md"
+_NAD_SOURCE = "Organizations/National Association of the Deaf.md"
+_CLERC_SOURCE = "Organizations/Laurent Clerc National Deaf Education Center.md"
+_MENTORS_SOURCE = ("LanguageDeprivationAgent/Parent Guidance/"
+                   "Finding Deaf Mentors and Community.md")
+_PREK_SOURCE = ("LanguageDeprivationAgent/Parent Guidance/"
+                "Ages 3 to 5 Pre-K Decisions.md")
+
+_ROUTES = (
+    # (name, regex, [(source, (must_contain substrings...)), ...])
+    ("medical",
+     re.compile(r"\b(cochlear implants?|implants?|\bCI\b|surgery|surgical|operation|"
+                r"candidate|candidacy|mapping|medication)\b.{0,160}"
+                r"\b(safe|safety|risks?|dangerous|should (we|i)|do (the|it)|"
+                r"go ahead|tell me straight|yes or no|right (choice|decision|call)|"
+                r"worth it)\b|"
+                r"\b(safe|should (we|i)|right (choice|decision))\b.{0,80}"
+                r"\b(cochlear implants?|implant|surgery)\b", re.I | re.S),
+     [(_PARENTS_FAQ_SOURCE, ("Is a cochlear implant safe?",
+                             "Does my child need ASL if they have a cochlear implant?")),
+      (CRISIS_SOURCE, ("Out of scope", "Non-prescription", "yes-or-no"))]),
+    ("legal",
+     re.compile(r"\b(sue|suing|lawsuit|lawyer|attorney|due process|mediation|"
+                r"state complaint|custody|court|legal(ly)?|our chances|"
+                r"chances of winning)\b", re.I),
+     [(_PARENTS_FAQ_SOURCE, ("IEP team refuses to include sign",)),
+      (CRISIS_SOURCE, ("Out of scope", "Legal advice"))]),
+    ("out_of_area",
+     re.compile(r"\b(alabama|alaska|arizona|arkansas|california|colorado|"
+                r"connecticut|delaware|florida|georgia|hawaii|idaho|illinois|"
+                r"indiana|iowa|kansas|kentucky|louisiana|maine|massachusetts|"
+                r"michigan|minnesota|mississippi|missouri|montana|nebraska|"
+                r"nevada|new hampshire|new jersey|new mexico|new york|"
+                r"north carolina|north dakota|ohio|oklahoma|oregon|"
+                r"pennsylvania|rhode island|south carolina|south dakota|"
+                r"tennessee|texas|utah|vermont|west virginia|wisconsin|wyoming|"
+                r"puerto rico|rural|small town|hours from the nearest|"
+                r"not near|outside (the )?(dc|dmv|maryland))\b", re.I),
+     [(_NATIONAL_HELP_SOURCE, ("outside the DC and Maryland", "short version",
+                               "public systems")),
+      (_PARENTS_FAQ_SOURCE, ("What does LEAD-K do",))]),
+    ("mode_choice",
+     re.compile(r"\b(asl|sign(ing)?( language)?)\b.{0,20}\b(versus|vs\.?|or)\b"
+                r".{0,20}\b(listening|spoken|speech|oral|lsl|talking)|"
+                r"\btwo (valid |equal |competing )?(philosophies|approaches|"
+                r"camps|sides|options|paths)\b|\bfamily values\b|"
+                r"\bpick (whichever|a side|one philosophy)\b|"
+                r"\bwhich (approach|method|mode|philosophy|camp)\b", re.I | re.S),
+     [(CRISIS_SOURCE, ("Non-prescription", "non-negotiable")),
+      (_PARENTS_FAQ_SOURCE, ("Does my child need ASL if they have a cochlear implant?",))]),
+    ("placement",
+     re.compile(r"\b(school for the deaf|state school|residential school|"
+                r"mainstream(ed|ing)?|neighborhood school|public school|"
+                r"placement|magnet|co-enrollment|which school)\b.{0,200}"
+                r"\b(pick|choose|decide|which one|or our|or the|versus|vs\.?|"
+                r"better|instead|offer|compared|difference|rather than|"
+                r"does not)\b|"
+                r"\b(pick|choose|decide|which one)\b.{0,120}"
+                r"\b(school for the deaf|state school|neighborhood school|"
+                r"mainstream|interpreter)\b", re.I | re.S),
+     [(_PARENTS_FAQ_SOURCE, ("Will my child go to a school for the Deaf?",)),
+      (_PREK_SOURCE, ("Placement options, honestly described", "co-enrollment")),
+      (CRISIS_SOURCE, ("Non-prescription",))]),
+    ("monolith",
+     re.compile(r"\b(deaf (community|culture|people|adults|world))\b.{0,80}"
+                r"\b(want|wants|think|thinks|believe|say|says|position|view|"
+                r"opinion|consensus|stance)\b|"
+                r"\bcorrect (deaf )?(position|view|answer|stance)\b|"
+                r"\bjust politics\b|\bmonolith|\bspeak for (all|the|every)\b",
+                re.I | re.S),
+     [(CRISIS_SOURCE, ("monolith", "Refusal and redirect")),
+      (_PARENTS_FAQ_SOURCE, ("Is Deaf culture real or is it just politics?",))]),
+    ("milestones",
+     re.compile(r"\b(milestones?|falling behind|behind (for|on) (his|her|their) age|"
+                r"(only|maybe|just|about) (a few|\w+) (signs|words)|"
+                r"(words|signs) by now|cognitive(ly)?|developmental delay|"
+                r"something (else )?(is )?wrong with (him|her|them)|"
+                r"get (him|her|them) evaluated|evaluation for delay)\b", re.I),
+     [(_PARENTS_FAQ_SOURCE, ("How can I tell if my child is falling behind?",)),
+      (_MILESTONES_SOURCE, ("inadequate", "before assuming", "before concluding",
+                            "fluent-signer exposure", "ASL-CDI"))]),
+    ("late_start",
+     re.compile(r"\b(only (started|began) (signing|sign|asl)|"
+                r"(started|began) (signing|sign|asl) (this|last) year|"
+                r"we (were told to )?wait(ed)?|told (us )?to wait|too late|"
+                r"permanent (brain )?damage|how bad (we|did we) hurt|"
+                r"(did|have) we (already )?(caused?|hurt|damaged?|ruined?)|"
+                r"(five|six|seven|eight|nine|ten|eleven|twelve|1[0-5]|[5-9])"
+                r"( years old|-year-old| year old)?.{0,60}"
+                r"(almost no|no|little|barely any) (language|signs?|words))\b",
+                re.I | re.S),
+     [(_STARTING_LATE_SOURCE, ("not too late", "emergency", "well-intentioned",
+                               "strongest remediation", "Immersion"))]),
+    ("family_pressure",
+     re.compile(r"\b(my (parents|mother|father|mom|dad|in-laws|mother-in-law|"
+                r"father-in-law|family|relatives|grandparents|sister|brother)|"
+                r"grandma|grandpa|his (parents|family)|her (parents|family))\b"
+                r".{0,160}\b(different on purpose|cut (her|him|them) off|"
+                r"overreacting|isolat\w*|making (her|him|them) different|"
+                r"tense|won'?t (accept|support|sign)|do(es)?n'?t (agree|support|"
+                r"understand|approve)|think(s)? we (are|were)|say(s)? we (are|"
+                r"were)|against (it|signing|asl))\b", re.I | re.S),
+     [(_PARENTS_FAQ_SOURCE, ("My family thinks I am overreacting",))]),
+    ("grief",
+     re.compile(r"\b(griev\w*|grief|mourn\w*|cried|crying|cry (every|all|"
+                r"sometimes)|still cry|terrible (mother|father|parent|mom|dad)|"
+                r"(bad|awful|horrible) (mother|father|parent|mom|dad)|"
+                r"something wrong with me|should be over it|get over it)\b",
+                re.I),
+     [(_PARENTS_FAQ_SOURCE, ("What if I am grieving?",))]),
+    ("parent_fluency",
+     re.compile(r"\b(never (going to |gonna )?be (a )?fluent|not (a )?fluent|"
+                r"fluent (signer|enough)|failed .{0,24}(spanish|french|german|"
+                r"language)|bad at languages|too old to learn|learn(ing)? "
+                r"(asl|sign language|to sign) (myself|as an adult|at my age|"
+                r"fast enough)|am i (already )?failing|barely know any "
+                r"(asl|signs?)|know (almost )?no (asl|sign))\b", re.I),
+     [(_PARENTS_FAQ_SOURCE, ("Can I learn ASL while raising my child?",))]),
+    ("stop_signing",
+     re.compile(r"\b(let (the )?(asl|sign(ing)?( language)?) go|stop signing|"
+                r"drop (the )?(asl|sign(ing)?)|keep signing|still (need|have) "
+                r"to sign|signing (has become|is|became) a chore|give up "
+                r"(the )?(asl|sign(ing)?)|do(es)? (he|she|we) still need "
+                r"(asl|sign)|(no longer|not) need(s)? (to sign|asl|sign)|"
+                r"signing (have been )?wasted|prefers? (speech|talking|spoken))"
+                r"\b", re.I),
+     [(_PARENTS_FAQ_SOURCE, ("Will signing have been wasted?",
+                             "How long do I need to keep signing?"))]),
+    ("speech_myth",
+     re.compile(r"\b(never (learn to )?(talk|speak)|won'?t (ever )?(learn to )?"
+                r"(talk|speak)|(delay|hurt|harm|prevent|stop|interfere with|"
+                r"hold back|ruin) (his|her|their|my child'?s|the child'?s)? ?"
+                r"(speech|talking|spoken language)|sign(ing)? (will |would )?"
+                r"(delay|hurt|harm|prevent|stop|interfere|confuse)|speech "
+                r"(first|only|before sign)|confuse (him|her|them))\b", re.I),
+     [(_PARENTS_FAQ_SOURCE, ("Will sign language delay my child's speech?",
+                             "Will signing have been wasted?"))]),
+    ("deaf_mentors",
+     re.compile(r"\b(deaf (mentor|adult|role model|friend)s?|meet(ing)? deaf "
+                r"(adults|people|families)|know deaf adults|deaf community "
+                r"(event|center|group)s?)\b", re.I),
+     [(_MENTORS_SOURCE, ("mentor", "event", "program")),
+      (_PARENTS_FAQ_SOURCE, ("Can I learn ASL while raising my child?",)),
+      (_IFSP_SOURCE, ("Deaf mentor", "mentor"))]),
+    ("ifsp",
+     re.compile(r"\b(ifsp|individualized family service plan|part c "
+                r"(meeting|plan|services)|early intervention (meeting|plan))\b",
+                re.I),
+     [(_IFSP_SOURCE, ("family-centered", "IEP", "disagree", "rights",
+                      "Deaf mentor"))]),
+    ("national_orgs",
+     re.compile(r"\b(national (organizations?|groups?|resources?|"
+                r"associations?)|organizations? (that|who) (help|support|"
+                r"serve)|which organizations)\b", re.I),
+     [(_NATIONAL_HELP_SOURCE, ("short version", "National Association",
+                               "Clerc", "public systems")),
+      (_NAD_SOURCE, ("oldest", "civil")),
+      (_CLERC_SOURCE, ("KDES", "MSSD", "demonstration"))]),
+    ("provider_against_sign",
+     re.compile(r"\b(audiologist|pediatrician|doctor|physician|ent|"
+                r"otolaryngologist|surgeon|therapist|slp|speech therapist|"
+                r"provider|implant center|clinic|specialist)\b.{0,120}"
+                r"\b(not (to )?sign|no sign(ing)?|don'?t sign|stop signing|"
+                r"against sign(ing)?|should not sign|shouldn'?t sign|"
+                r"only (listening|speech|spoken)|focus(es)? on listening|"
+                r"listening only|oral only)", re.I | re.S),
+     [(_PARENTS_FAQ_SOURCE, ("My audiologist said not to sign",
+                             "Does my child need ASL if they have a cochlear implant?",
+                             "Will sign language delay my child's speech?")),
+      (_FIRST90_SOURCE, ("does not pause", "does not wait", "second opinion"))]),
+)
+
+# FAQ pin (parent persona). The Parents FAQ is the vault's own canonical
+# question list, one section per parent question, each chunk carrying its
+# question as a heading breadcrumb (build_index chunks type: faq notes one
+# section per chunk). When the fused ranking puts a FAQ chunk anywhere in the
+# top FAQ_PIN_WINDOW but diversification or keep_k left it out of context, pin
+# the best one to the front: a 3B model answers from the first snippet, and
+# the FAQ answer is the one written for exactly this audience.
+FAQ_PIN_WINDOW = _env_int("BRAIN_FAQ_PIN_WINDOW", 40)
+
+
+_FAQ_PIN_STOP = frozenset((
+    "the", "and", "for", "that", "this", "with", "what", "when", "will",
+    "does", "need", "have", "should", "your", "our", "his", "her", "they",
+    "them", "just", "how", "can", "you", "are", "was", "not", "than", "into",
+    "about", "there", "here", "who", "why", "which", "from", "any", "all",
+    "get", "got", "one", "two", "too", "own", "off", "out", "now", "yes",
+    "deaf", "child", "children", "baby", "son", "daughter", "kid", "kids",
+    "parent", "parents", "family", "asl", "sign", "signing", "language",
+))
+
+
+def _faq_pin_words(text):
+    """Content words for the FAQ-heading overlap test: lowercase, 3+ letters,
+    minus function words and the words every parent question contains."""
+    return {w for w in re.findall(r"[a-z]{3,}", (text or "").lower())
+            if w not in _FAQ_PIN_STOP}
+
+
+def _faq_pin(order_full, chunks, retrieved, question=""):
+    """The best-ranked Parents FAQ chunk within FAQ_PIN_WINDOW whose heading
+    shares a content word with the question, when NO FAQ chunk is in context
+    yet; else None. The overlap test is what keeps "What if I am grieving?"
+    off a milestones question that merely ranks it 30th. Never raises."""
+    try:
+        if any(c.get("source") == _PARENTS_FAQ_SOURCE for c in retrieved):
+            return None
+        qwords = _faq_pin_words(question)
+        for i in list(order_full or [])[:FAQ_PIN_WINDOW]:
+            c = chunks[i]
+            if c.get("source") != _PARENTS_FAQ_SOURCE:
+                continue
+            heading = (c.get("text") or "").split("\n", 1)[0]
+            if qwords & _faq_pin_words(heading):
+                return c
+    except Exception:
+        pass
+    return None
+
+
+_ROUTE_MAX_PER_SOURCE = 3   # pinned chunks per (route, source)
+_ROUTE_MAX_TOTAL = 6        # pinned chunks across all non-crisis routes
+
+
+def _source_chunks(meta, source, must_contain=()):
+    """Chunks of one note, optionally only those whose text contains any of
+    must_contain (case-insensitive). Falls back to the whole note when the
+    substrings match nothing (the note exists but was re-chunked), and to []
+    when the note is not in this index. Never raises."""
+    try:
+        by_source = (meta or {}).get("by_source") or {}
+        by_id = (meta or {}).get("by_id") or {}
+        ids = by_source.get(source)
+        if ids is None:
+            # Vault paths move; a target given as a path suffix still resolves.
+            for key in by_source:
+                if key.endswith(source):
+                    ids = by_source[key]
+                    break
+        all_chunks = [by_id[cid] for cid in (ids or ()) if cid in by_id]
+        if not must_contain:
+            return all_chunks
+        needles = [m.lower() for m in must_contain]
+        texts = [(c, (c.get("text") or "").lower()) for c in all_chunks]
+        # Needle order is priority order, and every needle gets covered
+        # before any needle gets a second chunk: with a per-source cap of 3,
+        # three "emergency" chunks of the Starting Late note once crowded out
+        # the one chunk carrying "well-intentioned" (parent_late_start 100 ->
+        # 40). Coverage-first: first chunk per needle, then remaining hits.
+        out, seen = [], set()
+        for n in needles:
+            for c, t in texts:
+                if n in t and id(c) not in seen:
+                    seen.add(id(c)); out.append(c)
+                    break
+        for c, t in texts:
+            if id(c) not in seen and any(n in t for n in needles):
+                seen.add(id(c)); out.append(c)
+        return out or all_chunks
+    except Exception:
+        return []
+
+
+def _route_question(question):
+    """Names of every scope route whose regex matches, in _ROUTES order.
+    Pure regex, no model call. Crisis is handled by _is_crisis_question and
+    is not in this list."""
+    q = question or ""
+    return [name for name, rx, _ in _ROUTES if rx.search(q)]
+
+
+def _route_chunks(routes, meta):
+    """Chunks to pin for the given route names, deduplicated by id, capped
+    per (route, source) and overall. Never raises."""
+    out, seen = [], set()
+    try:
+        for name, _, targets in _ROUTES:
+            if name not in routes:
+                continue
+            for source, needles in targets:
+                n = 0
+                for c in _source_chunks(meta, source, needles):
+                    cid = c.get("id")
+                    if cid in seen or n >= _ROUTE_MAX_PER_SOURCE:
+                        continue
+                    seen.add(cid); out.append(c); n += 1
+                    if len(out) >= _ROUTE_MAX_TOTAL:
+                        return out
+    except Exception:
+        pass
+    return out
+
 
 # Free-form refusals a small model emits INSTEAD of the exact INSUFFICIENT
 # sentinel that VAULT_FIRST_SYSTEM asks for. llama3.2:3b cannot be reliably
@@ -3816,6 +4463,36 @@ def retrieve_context(question, bm25, chunks, meta, model=None,
                 top_score = float(scores[ranked[0]])
             except Exception:
                 top_score = 0.0
+    # Crisis force-inject. Function top level on purpose: runs after every
+    # branch above, including an empty retrieval and every persona. Prepended,
+    # not appended, because fit_context truncates from the tail. Not counted
+    # against keep_k or the per-source cap: diversification already ran on
+    # `order`, and these are additive safety chunks.
+    # Pinned chunks go to the FRONT whether or not ranking already had them:
+    # a chunk that ranked 7th is one the 3B model answers past. Order is
+    # crisis, then scope routes, then the ranked context minus duplicates.
+    pinned = []
+    if _is_crisis_question(question):
+        pinned.extend(_crisis_chunks(meta))
+        mode = (mode or "") + "+crisis"
+    routes = _route_question(question)
+    if routes:
+        pinned.extend(_route_chunks(routes, meta))
+        mode = (mode or "") + "+" + "+".join(routes)
+    if pinned:
+        seen, front = set(), []
+        for c in pinned:
+            if c.get("id") not in seen:
+                seen.add(c.get("id")); front.append(c)
+        retrieved = front + [c for c in retrieved if c.get("id") not in seen]
+    if persona == "parent" and FAQ_PIN_WINDOW > 0:
+        pin = _faq_pin(order_full if order_full is not None else order,
+                       chunks, retrieved, question)
+        if pin is not None:
+            # Behind the route/crisis pins, ahead of the ranked context.
+            n_pinned = len(front) if pinned else 0
+            retrieved = retrieved[:n_pinned] + [pin] + retrieved[n_pinned:]
+            mode = (mode or "") + "+faq"
     return {"intent": intent, "wh": wh, "qtok": qtok, "scores": scores,
             "order": order, "order_full": order_full if order_full is not None
             else order, "keep_k": keep_k, "retrieved": retrieved,
@@ -4062,6 +4739,10 @@ def _handle_question_impl(model, question, history, bm25, chunks, meta,
     # second pass, never with a "be thorough, cite everything" instruction.
     system_prompt = PARENT_SYSTEM if persona == "parent" else VAULT_FIRST_SYSTEM
     system_prompt = _shape_for_intent(system_prompt, intent)
+    if _is_crisis_question(question):
+        system_prompt += CRISIS_SYSTEM_ADDENDUM
+    for _route in _route_question(question):
+        system_prompt += _ROUTE_ADDENDA.get(_route, "")
     vault_messages = [{"role": "system", "content": system_prompt}]
     _hist = history[-PHASE1_HISTORY_MSGS:] if history else []
     vault_messages.extend(_hist)
@@ -4571,7 +5252,20 @@ def main():
         except Exception:
             cache_count = 0
     if ui is not None:
-        ui.welcome(model, len(chunks), cache_count, VAULT_NAME, CACHE_DIR)
+        def _display_user_name():
+            # Multi-user greeting (Lia onboarding). user_names.json lives on
+            # the device only and is never deployed; missing file -> "there".
+            try:
+                import getpass, json
+                uname = getpass.getuser()
+                path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_names.json")
+                with open(path) as f:
+                    names = json.load(f)
+                return names.get(uname, uname.capitalize())
+            except Exception:
+                return "there"
+
+        ui.welcome(model, len(chunks), cache_count, VAULT_NAME, CACHE_DIR, _display_user_name())
         if cache is None:
             ui.note("[answer cache unavailable, running without it]")
     else:
