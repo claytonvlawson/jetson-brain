@@ -208,6 +208,12 @@ scp -q \
   "${HERE}/brain_input.py" \
   "${HERE}/brain_transcript.py" \
   "${HERE}/answer_cache.py" \
+  "${HERE}/langchain_agent.py" \
+  "${HERE}/vault_tools_local.py" \
+  "${HERE}/privacy_scan_local.py" \
+  "${HERE}/groq.env.example" \
+  "${HERE}/eval_route.py" \
+  "${HERE}/test_eval_route.py" \
   "${HERE}/web_cache.py" \
   "${HERE}/web_paths.py" \
   "${HERE}/build_index.py" \
