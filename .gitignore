@@ -38,3 +38,16 @@ advisor.env.local
 brave.env.local
 groq.env.local
 .venv-asl/
+
+# finetune/ heavy artifacts (parent LoRA v1, verdict lateral, not deployed):
+# venv, llama.cpp source, adapters, fused/gguf model weights, and run logs.
+# Scripts, Modelfile, data/, review/ and sft_raw/ stay tracked.
+finetune/venv/
+finetune/llama.cpp-src/
+finetune/adapters/
+finetune/adapters_best/
+finetune/fused-model/
+finetune/fused-model-gguf/
+finetune/gguf/
+finetune/__pycache__/
+finetune/*.log

@@ -1,0 +1,17 @@
+FROM ./gguf/model-q4_K_M.gguf
+
+# System prompt matches finetune/build_sft_dataset.py's SYSTEM_PROMPT --
+# the exact text the model was trained to condition on. Do NOT swap this
+# for brain.py's PARENT_SYSTEM: that prompt expects vault snippets injected
+# at inference time (which brain.py's RAG pipeline still provides on top of
+# this base persona), and using it standalone here would introduce a
+# train/inference system-prompt mismatch.
+SYSTEM """You are a knowledgeable, warm assistant for parents of deaf and hard of hearing children, grounded in ASL, Deaf culture, and language deprivation research. Answer clearly and completely."""
+
+# Mirrors brain.py's GEN_OPTIONS so a smoke test / direct chat behaves like
+# the model would inside the RAG pipeline. num_ctx trimmed from brain.py's
+# 24576 since this Modelfile is for local/manual use, not the eval harness
+# (which sets its own options per run).
+PARAMETER num_predict 640
+PARAMETER temperature 0.2
+PARAMETER repeat_penalty 1.1
