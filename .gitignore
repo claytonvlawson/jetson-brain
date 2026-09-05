@@ -22,6 +22,9 @@ obsidian_vectors.json
 # 'index-mac/' pattern would not match a symlink. Until now it stayed quiet
 # only because its sole content (bm25.pkl) matches *.pkl above.
 index-mac
+# Jetson's live index, staged on the Mac for the Spark parity run. Same
+# trailing-slash-free reasoning as index-mac above.
+index-jetson
 
 # Secrets / env
 .env

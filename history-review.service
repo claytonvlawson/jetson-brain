@@ -1,0 +1,32 @@
+# jetson-brain: nightly review of the brain REPL's own Q&A transcript.
+# Drafts retrieval-gap/novel-info candidate notes (from cache/transcript.jsonl)
+# into /mnt/nvme/brain/history_review/queue for human review with
+# history_review_approve.py; nothing is indexed until approved. Also renders
+# a JetFuel/<date>.docx report and best-effort pushes it to the Mac.
+#
+# Install on the Jetson (sudo needs the password there):
+#   sudo cp /mnt/nvme/brain/history-review.service /etc/systemd/system/
+#   sudo cp /mnt/nvme/brain/history-review.timer   /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now history-review.timer
+# Check:
+#   systemctl list-timers history-review.timer
+#   journalctl -u history-review.service -n 50
+#
+# JETFUEL_MAC_HOST must be set (in this unit's [Service] Environment= line, or
+# a drop-in) for the Mac push step to run at all; without it the .docx is
+# still written locally and the step is skipped with a log line, not an error.
+[Unit]
+Description=jetson-brain nightly history-review
+
+[Service]
+Type=oneshot
+User=snowbeach
+WorkingDirectory=/mnt/nvme/brain
+# Mac's WiFi LAN IP (same 192.168.99.x subnet the Jetson's own WiFi sits on),
+# not the USB-C tether address: the Mac is not always physically tethered
+# overnight, but both machines are normally on the home WiFi. Update this if
+# the Mac's DHCP lease ever changes.
+Environment=JETFUEL_MAC_HOST=clayton.lawson@192.168.99.77
+ExecStart=/usr/bin/python3 /mnt/nvme/brain/history_review.py
+Nice=10

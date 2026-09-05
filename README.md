@@ -65,12 +65,38 @@ Models served via Ollama, GPU-accelerated, weights on the NVMe:
 on-demand `openai/gpt-oss-20b` tier instead of generating locally
 (`BRAIN_ROUTE_MODE`, `BRAIN_CLOUD_MODEL`, `BRAIN_CLOUD_TIMEOUT_S`). Retrieval
 is unchanged either way - BM25/vault RAG always runs locally; only the final
-answer-generation step moves to the cloud. One measured comparison from
-2026-09-02: Groq generated the same question's answer in ~0.38s versus
-several seconds for the local `llama3.2:3b`. That's a single latency
-observation from that day's commit message, not a repeatable benchmark or a
-retrieval-quality comparison - no eval has measured accuracy differences
-between the two paths.
+answer-generation step moves to the cloud.
+
+`eval_route.py` measures the two generators against each other on the SAME
+retrieved context. It retrieves once per question through
+`langchain_agent.build_messages()`, hands the identical messages to the local
+`llama3.2:3b` and to Groq, times each, and grades both with `eval_brain.py`'s
+own judge (same checklist prompt and score formula) run on a Groq model from a
+third family, `qwen/qwen3.8-27b`, so neither arm grades itself. A cloud
+failure (timeout, 429, empty reply) is a scored-zero `cloud-error` row, never
+the silent fall-back to local that the production `answer()` does. Per-arm
+answers are also saved as `--answers-out` JSONL, so
+`eval_brain.py --grade-only ... --judge-model qwen2.5:7b` can re-grade the same
+answers with the local judge later.
+
+```bash
+# on the Jetson
+cd /mnt/nvme/brain && set -a && . ./groq.env.local && set +a
+BRAIN_SEED=1 BRAIN_TEMPERATURE=0 BRAIN_AUTOLEARN=0 BRAIN_PRIVACY_SCAN=0 \
+  python3 eval_route.py \
+    --gold factual_gold.jsonl,multihop_gold.jsonl,meta_gold.jsonl \
+    --arms local,cloud --judge groq:qwen/qwen3.8-27b --budget-s 600 \
+    --out eval_results/ROUTE_$(date +%Y%m%d_%H%M).json
+```
+
+No accepted result yet. The first battery (2026-09-03, `ROUTE_20260903_1140`, on
+the Jetson) produced local answers but zero valid judge verdicts and several
+0.3-second cloud errors, which look like Groq free-tier rate limits; the
+harness now waits out 429s and records the account's `x-ratelimit-*` limits
+in the fingerprint. The measured table goes here once a run completes with a
+live judge. Until then the only number on record is the single 2026-09-02
+observation of ~0.38s Groq generation versus several seconds for the local
+`llama3.2:3b`, which is a latency anecdote, not an accuracy comparison.
 
 Pieces:
 

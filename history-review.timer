@@ -1,0 +1,18 @@
+# jetson-brain: run the history review nightly, 23:59. Kept close to
+# midnight (and RandomizedDelaySec kept small) so the report reliably lands
+# on the Mac before the 5am enrichment pass and 5:30am email read it.
+# Deliberately distinct from brain-learn.timer (Sun 03:30), research-
+# agent.timer (Mon 04:00) and web-review-digest.timer (daily 06:30) so none
+# of the four ever contend for Ollama or the index lock. Persistent=true
+# catches up after a powered-off night. See history-review.service for
+# install commands.
+[Unit]
+Description=jetson-brain nightly history-review timer
+
+[Timer]
+OnCalendar=*-*-* 23:59:00
+Persistent=true
+RandomizedDelaySec=2m
+
+[Install]
+WantedBy=timers.target

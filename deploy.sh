@@ -14,7 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Deploying brain to ${JETSON}:${REMOTE}"
 
 # ---- Preflight: local files ---------------------------------------------
-for f in brain.py brain_ui.py brain_input.py brain_transcript.py answer_cache.py web_cache.py web_paths.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py score_depth.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl depth_gold.jsonl depth_retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brave.env.example brain_web.py brain-web.sh brain-web.service brain-gc.sh brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py review_qa.py web_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py brain_skills.py brain_depth.py brain_ollama_shim.py brain-ollama-shim.service escalate.py web_review_digest.py web-review-digest.service web-review-digest.timer test_brain_depth.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py test_obsidian_blocks.py test_brain_skills.py test_brain_skills_connections.py test_ollama_shim.py test_hyde.py test_ctx_fit.py test_embed_prefix.py test_brain_input.py test_brain_transcript.py test_web_review.py test_web_review_digest.py test_plain_voice.py test_crisis_trigger.py test_default_scope.py test_index_tags.py spark/ollama_compat.py spark/README.md spark/test_ollama_compat.py; do
+for f in brain.py brain_ui.py brain_input.py brain_transcript.py answer_cache.py langchain_agent.py vault_tools_local.py privacy_scan_local.py groq.env.example eval_route.py test_eval_route.py web_cache.py web_paths.py build_index.py update_index.py refresh_web.py prime_cache.py eval_brain.py eval_retrieval.py score_depth.py gold_questions.jsonl heldout_gold.jsonl parent_gold.jsonl parent_hard_gold.jsonl meta_gold.jsonl factual_gold.jsonl multihop_gold.jsonl retrieval_gold.jsonl depth_gold.jsonl depth_retrieval_gold.jsonl install.sh requirements.txt jetson-online.sh jetson-wifi.sh jetson-online.service asl_server.py asl_sign_model.py asl_webcam.py asl-mac.sh jetson-menu.sh advisor_server.py advisor-funnel-jetson.sh advisor.service advisor.env.example brave.env.example brain_web.py brain-web.sh brain-web.service brain-gc.sh brain-learn.service brain-learn.timer semantic_cache.py research_sources.py research_fetch.py research_note.py research_agent.py research_review.py review_qa.py web_review.py research-agent.service research-agent.timer obsidian_rank.py export_obsidian_vectors.py brain_skills.py brain_depth.py brain_ollama_shim.py brain-ollama-shim.service escalate.py web_review_digest.py web-review-digest.service web-review-digest.timer history_note.py history_review.py history_review_approve.py history-review.service history-review.timer test_brain_depth.py test_hybrid.py test_is_insufficient.py test_intent.py test_note_card.py test_stream_holdback.py test_obsidian_rank.py test_obsidian_expand.py test_web_semantic.py test_obsidian_blocks.py test_brain_skills.py test_brain_skills_connections.py test_ollama_shim.py test_hyde.py test_ctx_fit.py test_embed_prefix.py test_brain_input.py test_brain_transcript.py test_web_review.py test_web_review_digest.py test_plain_voice.py test_crisis_trigger.py test_default_scope.py test_index_tags.py spark/ollama_compat.py spark/README.md spark/PARITY-RUN.md spark/test_ollama_compat.py; do
   if [[ ! -f "${HERE}/${f}" ]]; then
     echo "ERROR: missing required file next to deploy.sh: ${f}" >&2
     exit 1
@@ -170,6 +170,7 @@ echo "==> Syncing vault markdown (md only) to ${REMOTE}/vault/ ..."
 rsync -az --delete --prune-empty-dirs \
   --exclude='_WebCache/' \
   --exclude='_Research/' \
+  --exclude='_History/' \
   --exclude='_Advisor/' \
   --exclude='_PendingReview/' \
   --exclude='Templates/' \
@@ -217,6 +218,7 @@ scp -q \
   "${HERE}/gold_questions.jsonl" \
   "${HERE}/heldout_gold.jsonl" \
   "${HERE}/parent_gold.jsonl" \
+  "${HERE}/parent_hard_gold.jsonl" \
   "${HERE}/meta_gold.jsonl" \
   "${HERE}/factual_gold.jsonl" \
   "${HERE}/multihop_gold.jsonl" \
@@ -266,6 +268,11 @@ scp -q \
   "${HERE}/web_review_digest.py" \
   "${HERE}/web-review-digest.service" \
   "${HERE}/web-review-digest.timer" \
+  "${HERE}/history_note.py" \
+  "${HERE}/history_review.py" \
+  "${HERE}/history_review_approve.py" \
+  "${HERE}/history-review.service" \
+  "${HERE}/history-review.timer" \
   "${HERE}/test_hybrid.py" \
   "${HERE}/test_is_insufficient.py" \
   "${HERE}/test_intent.py" \
@@ -300,6 +307,7 @@ scp -q \
   "${HERE}/spark/ollama_compat.py" \
   "${HERE}/spark/test_ollama_compat.py" \
   "${HERE}/spark/README.md" \
+  "${HERE}/spark/PARITY-RUN.md" \
   "${JETSON}:${REMOTE}/spark/"
 
 # obsidian_vectors.json is a generated artifact (see the step above), not
@@ -402,6 +410,19 @@ Next steps:
      stream in token by token. See README.md for the full click path.
      Status: systemctl status brain-ollama-shim.service
      Diagnose the whole Mac-to-Jetson chain in one shot: bash mac/brain-doctor
+
+  6. Nightly history review (one time): drafts retrieval-gap/novel-info notes
+     from your own REPL transcript and pushes a JetFuel/<date>.docx report to
+     this Mac.
+       ssh ${JETSON}
+       sudo cp ${REMOTE}/history-review.service /etc/systemd/system/
+       sudo cp ${REMOTE}/history-review.timer   /etc/systemd/system/
+       sudo systemctl daemon-reload
+       sudo systemctl enable --now history-review.timer
+     Set JETFUEL_MAC_HOST (e.g. via a systemd drop-in) for the Mac push step
+     to run; without it the .docx still lands on the Jetson at
+     ${REMOTE}/history_review/JetFuel/, just not on this Mac. Review drafts
+     with: python3 ${REMOTE}/history_review_approve.py --list
 
 DEPLOY OK: ${MD_COUNT} md files, code + install pushed to ${JETSON}:${REMOTE}
 EOF

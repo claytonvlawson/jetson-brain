@@ -35,7 +35,7 @@ status_line(){
 show_menu(){
   echo
   echo "  ${b}What would you like to do?${r}"
-  echo "    ${gr}1${r})  Chat with your ThesisVault   ${dm}(brain: any model, RAG + auto web)${r}"
+  echo "    ${gr}1${r})  Language Deprivation AI Agent   ${dm}(brain: any model, RAG + auto web)${r}"
   echo "    ${gr}2${r})  Run an Ollama model directly ${dm}(plain chat, no vault)${r}"
   echo "    ${gr}3${r})  NCDD NBA draft lab"
   echo "    ${gr}4${r})  Internet status / connectivity check"
