@@ -122,6 +122,11 @@ the baseline stays reproducible. It was stale by 18 notes including
 
 ## Verify in five minutes
 
+**Run brain_web on the Mac** (no Mac python has rank_bm25; the project venv does, gitignored):
+    python3 -m venv .venv && .venv/bin/pip install rank_bm25 ollama numpy requests beautifulsoup4 ddgs   # once
+    BRAIN_ROOT=$HOME/jetson-brain BRAIN_INDEX=$HOME/jetson-brain/index-mac-v2/bm25.pkl BRAIN_VAULT=$HOME/Desktop/Dream/ThesisVault BRAIN_WEB_PORT=8897 .venv/bin/python brain_web.py
+    curl 'http://127.0.0.1:8897/note?path=People/Tom%20Humphries.md'   # 200 with title + tags; ../etc/passwd -> 400
+
 ```bash
 cd ~/jetson-brain && source finetune/venv/bin/activate
 python3 test_crisis_trigger.py && python3 test_hybrid.py && python3 test_hyde.py
