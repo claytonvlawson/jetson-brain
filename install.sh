@@ -40,31 +40,6 @@ else
   python3 -m pip install --user ollama rank_bm25 ddgs beautifulsoup4 requests
 fi
 
-echo "==> Ensuring MediaPipe is installed for ASL sign detection ..."
-if python3 -c "import mediapipe" >/dev/null 2>&1; then
-  echo "mediapipe already installed."
-else
-  echo "Installing mediapipe (pip --user) ..."
-  python3 -m pip install --user mediapipe
-fi
-
-echo "==> Ensuring the MediaPipe hand landmarker model is present ..."
-MODELS_DIR="${BRAIN_DIR}/models"
-HAND_MODEL="${MODELS_DIR}/hand_landmarker.task"
-HAND_MODEL_URL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-mkdir -p "${MODELS_DIR}"
-if [ -f "${HAND_MODEL}" ]; then
-  echo "hand_landmarker.task already present at ${HAND_MODEL}."
-else
-  echo "Downloading hand_landmarker.task to ${HAND_MODEL} ..."
-  if curl -fsSL "${HAND_MODEL_URL}" -o "${HAND_MODEL}"; then
-    echo "Downloaded hand_landmarker.task."
-  else
-    rm -f "${HAND_MODEL}"
-    echo "WARN: hand model download failed; ASL detection will need it later."
-  fi
-fi
-
 echo "==> Ensuring install directories exist (no sudo; snowbeach owns /mnt/nvme) ..."
 mkdir -p "${VAULT_DIR}" "${INDEX_DIR}"
 

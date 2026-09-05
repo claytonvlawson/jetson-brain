@@ -43,7 +43,6 @@ show_menu(){
   echo "    ${gr}6${r})  Super Saiyan Mode (SSJ mode)  ${dm}[sudo]${r}"
   echo "    ${gr}7${r})  Rebuild the vault index (with embeddings)"
   echo "    ${gr}8${r})  Open the README"
-  echo "    ${gr}9${r})  ASL sign detection   ${dm}(streams your Mac webcam -> MediaPipe hands)${r}"
   echo "    ${gr}g${r})  LangChain agent  ${dm}(same vault, local models + optional Groq cloud speed tier)${r}"
   echo "    ${gr}w${r})  Review fetched web pages     ${dm}($(web_queue_count) waiting for approval)${r}"
   echo "    ${gr}q${r})  Quit to shell   ${dm}(type 'menu' to reopen)${r}"
@@ -129,16 +128,6 @@ ncdd_lab(){
   fi
 }
 
-asl_detect(){
-  echo
-  echo "${b}ASL sign detection${r}"
-  echo "  ${dm}This Jetson runs MediaPipe Hands and classifies signs.${r}"
-  echo "  ${dm}On your Mac run:  cd ~/jetson-brain && ./asl-mac.sh${r}"
-  echo "  ${dm}That streams your Mac webcam frames here for landmarking.${r}"
-  echo
-  python3 "$BRAIN_ROOT/asl_server.py"
-}
-
 # langchain_agent.py's own CLI (interactive() / main() in that file) --
 # same vault and local models as option 1, plus an optional Groq cloud tier
 # for short/simple questions. groq.env.local is the same git-ignored,
@@ -178,7 +167,6 @@ main(){
          # build_index.py now refuses that unless you pass --no-embed.
          python3 "$BRAIN_ROOT/build_index.py" --embed; pause ;;
       8) if [ -f "$BRAIN_ROOT/README.md" ]; then less "$BRAIN_ROOT/README.md"; elif [ -f "$HOME/README.md" ]; then less "$HOME/README.md"; else echo "README not found."; sleep 1; fi ;;
-      9) asl_detect; pause ;;
       g|G) langchain_repl; pause ;;
       w|W) web_review ;;
       q|Q|"") clear 2>/dev/null; echo "At the shell. Type ${b}menu${r} to reopen the menu, or ${b}brain${r} to chat."; break ;;
