@@ -104,7 +104,11 @@ PAGE = r"""<!doctype html>
   }
   .a .srcs .view:active{border-color:var(--accent2);color:var(--accent2)}
   .meta{font-size:11px;color:var(--muted);margin-top:8px}
-  /* note sheet (GET /note viewer) */
+  /* note sheet (GET /note viewer). The [hidden] rule must come first and
+     win: #note sets display:flex, which would otherwise beat the browser's
+     own [hidden]{display:none} and leave an invisible full-screen sheet
+     swallowing every tap on the page (caught by the headless check). */
+  #shade[hidden],#note[hidden]{display:none !important}
   #shade{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20}
   #note{
     position:fixed;left:0;right:0;bottom:0;top:max(48px,env(safe-area-inset-top));z-index:21;
