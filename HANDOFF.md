@@ -438,3 +438,12 @@ a two-value sweep loop silently ran every arm at the defaults; use
   `parent-agent-crisis-retrieval-gap.md`, `jetson-brain-parent-finetune-v1-verdict.md`
   (why fine-tuning could not fix this), `jetson-brain-index-staleness-traps.md`.
 - Plan file that preceded this: `~/.claude/plans/floating-coalescing-owl.md`.
+
+## brain_web: clickable sources (2026-09-05)
+
+Every `.md` source under an answer is now a link. Tap the path: `obsidian://open?vault=ThesisVault&file=<path>` (same URI brain_ui.py builds for the REPL), so the note opens in Obsidian on the phone or the Mac when that device has the vault. Tap `view`: a sheet inside the page renders the note served from the Jetson (`GET /note?path=<vault-relative .md>`, no GPU lock, minimal markdown renderer in the page script, wikilinks shown but not navigable yet).
+
+- `brain_web_note.py`: `path_shape_ok` (400 on a malformed path), `note_path` (realpath must stay under the vault root; symlink escapes, `..`, absolute, non-.md all rejected), `load_note` (reuses build_index's `split_frontmatter`, `parse_frontmatter_fields`, `chunk_tags`; body capped at 200 KB with `truncated: true`).
+- `test_brain_web_note.py`: 27 checks, no server, no Ollama. Both files are in deploy.sh's preflight AND scp lists.
+- The Mac cannot run brain_web locally (no `rank_bm25` in any Mac python), so the route is verified on the device after deploy. The page script passes `node --check` and the renderer was exercised headlessly (escapes HTML first, one anchor per URL).
+- Follow-up: make `[[wikilinks]]` inside the sheet navigate (resolve through the index `link_map`, open the target with `openNote`).
