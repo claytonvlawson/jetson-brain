@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.learnwithclay.feedback-research</string>
+
+	<!-- Same launch shape as ai.learnwithclay.advisor-vault-sync.plist: go
+	     through /usr/bin/python3 (which holds Full Disk Access on this Mac) so
+	     the child can read ~/Desktop/Dream/ThesisVault for vault dedup. The
+	     venv python is the child; subprocess.call keeps /usr/bin/python3 alive
+	     as the responsible process so the TCC grant carries. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>-c</string>
+		<string>import subprocess, sys; sys.exit(subprocess.call(["/Users/you.lawson/jetson-brain/.venv/bin/python", "/Users/you.lawson/jetson-brain/feedback_research.py", "--pull"]))</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>/Users/you.lawson/jetson-brain</string>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>BRAIN_ROOT</key>
+		<string>/Users/you.lawson/.advisor-feedback</string>
+		<key>BRAIN_VAULT</key>
+		<string>/Users/you.lawson/Desktop/Dream/ThesisVault</string>
+		<key>RESEARCH_NOTES_DIR</key>
+		<string>/Users/you.lawson/Desktop/Dream/ThesisVault/LanguageDeprivationAgent/Feedback Research</string>
+		<key>OLLAMA_HOST_URL</key>
+		<string>http://127.0.0.1:11434</string>
+		<key>BRAVE_ENV_FILE</key>
+		<string>/Users/you.lawson/.config/jetfuel/search.env</string>
+		<key>ADVISOR_VM</key>
+		<string>advisor-vm</string>
+		<key>HOME</key>
+		<string>/Users/you.lawson</string>
+		<key>PATH</key>
+		<string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string>
+	</dict>
+
+	<!-- Daily at 23:59. Drafts land in ~/.advisor-feedback/research/queue for
+	     research_review.py; nothing is written into the vault by this job.
+	     A missed run (laptop asleep) fires once at the next wake. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>23</integer>
+		<key>Minute</key>
+		<integer>59</integer>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<false/>
+
+	<key>StandardOutPath</key>
+	<string>/Users/you.lawson/Library/Logs/feedback-research.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/you.lawson/Library/Logs/feedback-research.log</string>
+</dict>
+</plist>

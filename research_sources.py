@@ -249,6 +249,23 @@ def openalex_candidates(since_date, author_ids=None):
     return out
 
 
+def openalex_candidates_for_query(query, since_date=None, max_pages=1,
+                                  discovery_source="openalex-feedback"):
+    """One free-text OpenAlex sweep for a query that is NOT on the fixed
+    topic list (feedback_research.py turns a parent's complaint into these).
+    Same candidate shape as openalex_candidates(); [] on failure or empty
+    query. One page (50 works) by default: a feedback run wants the top hits,
+    not a backfill."""
+    q = str(query or "").strip()
+    if not q:
+        return []
+    # A stray comma would be read as a filter separator by OpenAlex.
+    q = q.replace(",", " ")
+    datef = ",from_publication_date:" + since_date if since_date else ""
+    expr = "title_and_abstract.search:" + q + ",type:article" + datef
+    return _openalex_sweep(expr, discovery_source, max_pages=max_pages)
+
+
 # ---------------------------------------------------------------------------
 # ERIC
 # ---------------------------------------------------------------------------

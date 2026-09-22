@@ -150,6 +150,9 @@ def render_note(cand, fulltext="", fulltext_via="", status="candidate"):
         fm.append("eric_id: %s" % cand["eric_id"])
     if score is not None:
         fm.append("relevance_score: %s" % score)
+    if cand.get("feedback_id"):
+        fm.append("feedback_id: %s" % _yaml_quote(
+            _sanitize_frontmatter_value(str(cand["feedback_id"]))))
     fm.append("---")
 
     peer = "peer-reviewed" if cand.get("peer_reviewed") else (
@@ -174,6 +177,20 @@ def render_note(cand, fulltext="", fulltext_via="", status="candidate"):
     if note:
         body.extend(["", "> [!abstract] Why this matters",
                      "> " + _no_dashes(re.sub(r"\s+", " ", note))])
+    # Feedback provenance: the parent's complaint that triggered this search.
+    # Restated in the body (not just frontmatter) so retrieval on the
+    # parent's own phrasing finds the note.
+    fb_note = str(cand.get("feedback_note") or "").strip()
+    if fb_note:
+        body.extend(["", "## Why this was researched", ""])
+        fb_q = str(cand.get("feedback_question") or "").strip()
+        if fb_q:
+            body.append("A parent asked: " + _no_dashes(
+                _clean_body_text(re.sub(r"\s+", " ", fb_q))[:500]))
+            body.append("")
+        body.append("The parent's feedback on the advisor's answer: "
+                    + _no_dashes(_clean_body_text(
+                        re.sub(r"\s+", " ", fb_note))[:1000]))
     abstract = str(cand.get("abstract") or "").strip()
     if abstract:
         body.extend(["", "## Abstract", "",

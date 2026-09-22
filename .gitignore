@@ -37,6 +37,7 @@ index-jetson
 advisor.env.local
 brave.env.local
 groq.env.local
+anthropic.env.local
 .venv-asl/
 
 # finetune/ heavy artifacts (parent LoRA v1, verdict lateral, not deployed):
@@ -49,5 +50,7 @@ finetune/adapters_best/
 finetune/fused-model/
 finetune/fused-model-gguf/
 finetune/gguf/
+finetune/cloud/gguf-v2-*/
+finetune/cloud/merged-v2-*/
 finetune/__pycache__/
 finetune/*.log

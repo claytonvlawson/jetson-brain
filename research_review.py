@@ -45,8 +45,18 @@ from research_agent import (QUEUE_DIR, RESEARCH_DIR, VAULT_DIR,
                             load_state, save_state, all_keys)
 from web_cache import _atomic_write_text
 
-RESEARCH_NOTES_DIR = os.path.join(VAULT_DIR, "_Research")
+# Jetson default: vault/_Research (indexed by update_index.py's MANAGED_DIRS).
+# On the Mac, feedback_research drafts are approved into a normal vault folder
+# instead, because the cloud advisor's retrieval.build_index() and
+# mirror_vault.sh both skip every underscore folder. Set RESEARCH_NOTES_DIR
+# to point approvals there.
+RESEARCH_NOTES_DIR = os.environ.get(
+    "RESEARCH_NOTES_DIR", os.path.join(VAULT_DIR, "_Research"))
 DECISIONS_LOG = os.path.join(RESEARCH_DIR, "decisions.jsonl")
+# When set, approvals are folded in by running this shell command (the Mac
+# uses it for vault-advisor-cloud/mirror_vault.sh) instead of the Jetson's
+# update_index.run(). Only used with --push.
+RESEARCH_PUSH_CMD = os.environ.get("RESEARCH_PUSH_CMD", "")
 
 
 def _append_decision(record):
@@ -115,6 +125,12 @@ def show(cand, idx, total):
         print("Link   : " + cand["landing_url"])
     if cand.get("score_reason"):
         print("LLM    : " + cand["score_reason"])
+    if cand.get("feedback_note"):
+        fq = str(cand.get("feedback_question") or "").strip()
+        if fq:
+            print("Parent asked  : " + fq[:300])
+        print("Parent said   : " + str(cand["feedback_note"])[:300]
+              + "   (feedback %s)" % (cand.get("feedback_id") or "?"))
     if cand.get("fetch_note"):
         print("Fetch  : " + cand["fetch_note"])
     elif cand.get("fulltext_via"):
@@ -145,8 +161,22 @@ def _promote(cand):
     return dest if _atomic_write_text(dest, text) else ""
 
 
-def _reindex():
-    """Fold approvals/removals into bm25.pkl; the running brain hot-reloads."""
+def _reindex(push=False):
+    """Fold approvals/removals into the live index. Jetson: update_index.run()
+    on bm25.pkl, which the running brain hot-reloads. Mac (--push with
+    RESEARCH_PUSH_CMD set): run the push command, which mirrors the vault to
+    the droplet, rebuilds its BM25, and restarts the advisor services."""
+    if RESEARCH_PUSH_CMD:
+        if not push:
+            print("[review] not pushing (no --push). Push later with:\n    "
+                  + RESEARCH_PUSH_CMD)
+            return 0
+        print("[review] pushing: " + RESEARCH_PUSH_CMD)
+        try:
+            return subprocess.call(RESEARCH_PUSH_CMD, shell=True)
+        except Exception as exc:
+            print("[review] push failed (%r); run it manually" % exc)
+            return 1
     try:
         import update_index
         return update_index.run(vault=VAULT_DIR, quiet=False)
@@ -156,7 +186,7 @@ def _reindex():
         return 1
 
 
-def cmd_review(limit):
+def cmd_review(limit, push=False):
     queue = load_queue()
     if limit > 0:
         queue = queue[:limit]
@@ -213,8 +243,9 @@ def cmd_review(limit):
     print("\nSession done: %d approved, %d rejected." % (approvals, removals))
     if approvals:
         print("Folding approved notes into the index...")
-        _reindex()
-        print("Pull them into the Mac vault with:  ./research-pull.sh")
+        _reindex(push=push)
+        if not RESEARCH_PUSH_CMD:
+            print("Pull them into the Mac vault with:  ./research-pull.sh")
     return 0
 
 
@@ -286,6 +317,9 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="list the queue")
     ap.add_argument("--show-discards", action="store_true",
                     help="show what the LLM auto-discarded")
+    ap.add_argument("--push", action="store_true",
+                    help="after approving, run RESEARCH_PUSH_CMD (Mac: mirror "
+                         "the vault to the droplet and restart the advisor)")
     args = ap.parse_args(argv)
     if args.list:
         return cmd_list()
@@ -296,7 +330,7 @@ def main(argv=None):
             print("Usage: research_review.py retire <citekey>")
             return 2
         return cmd_retire(args.citekey)
-    return cmd_review(args.limit)
+    return cmd_review(args.limit, push=args.push)
 
 
 if __name__ == "__main__":
