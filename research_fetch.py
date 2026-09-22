@@ -17,8 +17,10 @@ The route table:
   - Everything else is fetched with curl_cffi Chrome impersonation (plain
     TLS clients get 403 from half the publishers), PDF via pypdf, HTML via
     trafilatura when installed with a BeautifulSoup fallback.
-  - Any failure falls back DOI-to-PMC, then to abstract-only, which is a
-    legitimate outcome (the note becomes a metadata stub with the abstract).
+  - Any failure falls back DOI-to-PMC, then to the open-access indexes in
+    research_oa.py (Unpaywall, OpenAlex, Europe PMC, Semantic Scholar, CORE,
+    arXiv), then to abstract-only, which is a legitimate outcome (the note
+    becomes a metadata stub with the abstract).
 
 verify_fulltext() is the gate: PDF magic bytes or content-type for PDFs;
 for HTML, a minimum extracted length AND no bot-challenge markers.
@@ -28,13 +30,15 @@ Never raises into the caller. Python 3.9 compatible. No em dashes.
 from __future__ import annotations
 
 import io
+import os
 import re
 import json
 import time
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "jetson-brain-research-agent/1.0 (mailto:claytonvlawson@gmail.com)"
+MAILTO = os.environ.get("OA_MAILTO", "claytonvlawson@gmail.com")
+USER_AGENT = "jetson-brain-research-agent/1.0 (mailto:%s)" % MAILTO
 FETCH_TIMEOUT = 60
 MIN_BODY_CHARS = 500          # papers.py threshold: less than this is not a body
 FULLTEXT_CAP = 20000          # cap stored full text so notes stay indexable
@@ -132,6 +136,13 @@ def fetch_pmc_body(pmcid):
         {"db": "pmc", "id": pmcid, "rettype": "xml"})
     if status != 200 or not raw:
         return ""
+    return jats_to_text(raw)
+
+
+def jats_to_text(raw):
+    """JATS XML bytes (NCBI efetch or Europe PMC fullTextXML) to markdown-ish
+    text: '## Abstract', then each body section heading and its paragraphs.
+    '' when the deposit has no <body> long enough to be an article."""
     try:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(raw.decode("utf-8", "replace"))
@@ -300,6 +311,18 @@ def fetch_fulltext(candidate):
         if body and len(body) >= MIN_BODY_CHARS:
             return {"body": body[:FULLTEXT_CAP], "via": "pmc-efetch",
                     "note": "recovered via DOI-to-PMC"}
+
+    # Open-access indexes (Unpaywall, OpenAlex, Europe PMC, Semantic Scholar,
+    # CORE, arXiv). Lawful deposits only; same verify gate.
+    if doi or candidate.get("title"):
+        try:
+            import research_oa
+            oa = research_oa.fetch_open_access(candidate)
+            if oa["body"]:
+                return {"body": oa["body"], "via": oa["via"],
+                        "note": "recovered via open-access index"}
+        except Exception:
+            pass
 
     return {"body": "", "via": "",
             "note": "no verified full text; abstract-only stub"}
