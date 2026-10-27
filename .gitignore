@@ -54,3 +54,10 @@ finetune/cloud/gguf-v2-*/
 finetune/cloud/merged-v2-*/
 finetune/__pycache__/
 finetune/*.log
+
+# Model weights (too large for git)
+*.gguf
+*.safetensors
+finetune/gguf_jbp_v1/
+finetune/persona_fuse_deq_v1/
+finetune/persona_fuse_v1/

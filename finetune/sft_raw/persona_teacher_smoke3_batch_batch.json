@@ -1,0 +1,7 @@
+{
+  "batch_id": "msgbatch_016u1JpUfVd696r3EXE7KJHn",
+  "split": "/private/tmp/claude-505/-Users-clayton-lawson/b646092c-be07-4ad5-b55f-769f1f86282d/scratchpad/smoke_mixed.jsonl",
+  "rows": 2,
+  "teacher_model": "claude-sonnet-5",
+  "created": "2026-09-08T02:01:42"
+}

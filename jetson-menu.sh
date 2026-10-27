@@ -43,7 +43,10 @@ show_menu(){
   echo "    ${gr}6${r})  Super Saiyan Mode (SSJ mode)  ${dm}[sudo]${r}"
   echo "    ${gr}7${r})  Rebuild the vault index (with embeddings)"
   echo "    ${gr}8${r})  Open the README"
-  echo "    ${gr}g${r})  LangChain agent  ${dm}(same vault, local models + optional Groq cloud speed tier)${r}"
+  echo "    ${gr}9${r})  Sign Studio   ${dm}(live ASL sentence reader + camera controls, web)${r}  $(studio_state)"
+  echo "    ${gr}v${r})  Gemma Vision   ${dm}(live camera + object identification with gemma4:e2b, web)${r}  $(vision_state)"
+  echo "    ${gr}c${r})  C920 Sentences   ${dm}(record the 212 ASL sentences on the C920, web)${r}  $(prompter_state)"
+  echo "    ${gr}g${r})  LangChain agent${dm}(same vault, local models + optional Groq cloud speed tier)${r}"
   echo "    ${gr}w${r})  Review fetched web pages     ${dm}($(web_queue_count) waiting for approval)${r}"
   echo "    ${gr}q${r})  Quit to shell   ${dm}(type 'menu' to reopen)${r}"
 }
@@ -146,6 +149,252 @@ langchain_repl(){
   ( cd "$BRAIN_ROOT" && python3 langchain_agent.py --interactive )
 }
 
+# Sign Studio: sign_studio.py in the ASL pipeline dir (built from the Mac's
+# ~/Desktop/Dream/asl-sentence-trainer). It runs detached, so it keeps going after
+# the menu or the SSH session closes. It binds loopback (for the Mac's studio.sh tunnel,
+# http://localhost:8092) plus the USB-C link address 192.168.55.1 when that link is up.
+# Never the tailnet or LAN: the page controls the camera and has no login.
+ASL_DIR="/mnt/nvme/mediapipe-hand"
+STUDIO_PORT=8092
+
+studio_pid(){ pgrep -f '[s]ign_studio\.py' | head -1; }
+studio_state(){ [ -n "$(studio_pid)" ] && echo "${gr}[running]${r}" || echo ""; }
+usb_up(){ ip -4 -o addr show 2>/dev/null | grep -q ' 192\.168\.55\.1/'; }
+studio_host(){ usb_up && echo 192.168.55.1 || echo 127.0.0.1; }
+
+studio_start(){
+  if [ ! -f "$ASL_DIR/sign_studio.py" ]; then
+    echo "sign_studio.py is not in $ASL_DIR. Run ./studio.sh deploy from the Mac."
+    return
+  fi
+  local host binds; host=$(studio_host)
+  binds=127.0.0.1; usb_up && binds="127.0.0.1,192.168.55.1"
+  "$ASL_DIR/asl_cam.sh" stop >/dev/null 2>&1      # signcam holds the camera
+  pkill -f '[g]emma_vision\.py'                   # so does Gemma Vision
+  pkill -f '[s]entence_decoder\.py'; pkill -f '[s]ign_studio\.py'; pkill -f '[l]ive_prompter\.py'; sleep 1
+  mkdir -p "$ASL_DIR/logs"
+  # Redirect the SUBSHELL, not just python: with "cd && python3 &" the & backgrounds the
+  # whole list, and that extra bash kept the menu's stdout open, so SSH never closed.
+  ( cd "$ASL_DIR" && setsid python3 sign_studio.py --host "$binds" --port "$STUDIO_PORT" & ) \
+      </dev/null >"$ASL_DIR/logs/sign_studio.log" 2>&1
+  printf "  starting (models take ~10s)"
+  local i
+  for i in $(seq 1 30); do
+    curl -s -m 1 -o /dev/null "http://$host:$STUDIO_PORT/api/state" && break
+    printf "."; sleep 1
+  done
+  echo
+  if curl -s -m 2 -o /dev/null "http://$host:$STUDIO_PORT/api/state"; then
+    echo "  ${gr}Sign Studio is up.${r}"
+    if [ "$host" = "192.168.55.1" ]; then
+      echo "  On the Mac (USB-C cable):  ${b}http://192.168.55.1:$STUDIO_PORT/${r}"
+      echo "  ${dm}or ./studio.sh start in ~/Desktop/Dream/asl-sentence-trainer for http://localhost:$STUDIO_PORT/${r}"
+    else
+      echo "  Loopback only (no USB-C link). On the Mac run:"
+      echo "    ssh -N -L $STUDIO_PORT:127.0.0.1:$STUDIO_PORT user@<jetson>   then open http://localhost:$STUDIO_PORT/"
+    fi
+    echo "  ${dm}It keeps running after you leave the menu. Stop it with 9 then x.${r}"
+  else
+    echo "  ${ye}Not answering. Last log lines:${r}"; tail -15 "$ASL_DIR/logs/sign_studio.log"
+  fi
+}
+
+sign_studio(){
+  local choice
+  while :; do
+    local pid host; pid=$(studio_pid); host=$(studio_host)
+    echo
+    if [ -n "$pid" ]; then
+      echo "  ${b}Sign Studio${r}   ${gr}running${r} ${dm}(pid $pid)  http://$host:$STUDIO_PORT/${r}"
+    else
+      echo "  ${b}Sign Studio${r}   ${dm}stopped${r}"
+    fi
+    echo "    ${gr}s${r})  Start / restart   ${dm}(stops signcam first, one reader per camera)${r}"
+    echo "    ${gr}x${r})  Stop"
+    echo "    ${gr}l${r})  Show the log"
+    echo "    ${gr}r${r})  Recent reads   ${dm}(logs/decoded.jsonl)${r}"
+    echo "    ${gr}b${r})  Back"
+    printf "\n  ${b}> ${r}"; read -r choice
+    case "$choice" in
+      s|S) studio_start; pause ;;
+      x|X) pkill -f '[s]ign_studio\.py' && echo "  stopped" || echo "  was not running"; pause ;;
+      l|L) tail -30 "$ASL_DIR/logs/sign_studio.log" 2>/dev/null || echo "  no log yet"; pause ;;
+      r|R) if [ -f "$ASL_DIR/logs/decoded.jsonl" ]; then
+             tail -15 "$ASL_DIR/logs/decoded.jsonl" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    d = json.loads(line)
+    tgt = " (target: %s, %s)" % (" ".join(d["target"]), "exact" if d.get("exact") else "%d%%" % round(100 * (d.get("score") or 0))) if d.get("target") else ""
+    print("  %s  %s%s" % (d.get("wall", "")[11:19], " ".join(d.get("gloss") or []) or "(nothing)", tgt))'
+           else echo "  no reads logged yet"; fi
+           pause ;;
+      b|B|"") return ;;
+      *) echo "Unknown choice: $choice"; sleep 1 ;;
+    esac
+  done
+}
+
+# Gemma Vision: gemma_vision.py in /mnt/nvme/gemma-vision (source in the Mac repo's
+# vision/ folder, copied here by hand, not by deploy.sh). Same rules as Sign Studio:
+# detached so it outlives the menu, bound to loopback plus the USB-C address only
+# because the page shows the camera and has no login, and it takes the camera from
+# signcam / Sign Studio (one reader per camera). gemma4:e2b loads on the first
+# identification and Ollama releases it after 5 idle minutes.
+VISION_DIR="/mnt/nvme/gemma-vision"
+VISION_PORT=8093
+
+vision_pid(){ pgrep -f '[g]emma_vision\.py' | head -1; }
+vision_state(){ [ -n "$(vision_pid)" ] && echo "${gr}[running]${r}" || echo ""; }
+
+vision_start(){
+  if [ ! -f "$VISION_DIR/gemma_vision.py" ]; then
+    echo "gemma_vision.py is not in $VISION_DIR. Copy vision/gemma_vision.py from the Mac repo."
+    return
+  fi
+  if ! ollama list 2>/dev/null | grep -q '^gemma4:e2b'; then
+    echo "  ${ye}gemma4:e2b is not pulled.${r} Run:  ollama pull gemma4:e2b-it-q4_K_M   ${dm}(4.6 GB)${r}"
+    return
+  fi
+  local host binds; host=$(studio_host)
+  binds=127.0.0.1; usb_up && binds="127.0.0.1,192.168.55.1"
+  "$ASL_DIR/asl_cam.sh" stop >/dev/null 2>&1      # signcam holds the camera
+  pkill -f '[s]entence_decoder\.py'; pkill -f '[s]ign_studio\.py'; pkill -f '[g]emma_vision\.py'; pkill -f '[l]ive_prompter\.py'; sleep 1
+  mkdir -p "$VISION_DIR/logs"
+  ( cd "$VISION_DIR" && setsid python3 gemma_vision.py --host "$binds" --port "$VISION_PORT" & ) \
+      </dev/null >"$VISION_DIR/logs/gemma_vision.log" 2>&1
+  printf "  starting"
+  local i
+  for i in $(seq 1 15); do
+    curl -s -m 1 -o /dev/null "http://$host:$VISION_PORT/health" && break
+    printf "."; sleep 1
+  done
+  echo
+  if curl -s -m 2 -o /dev/null "http://$host:$VISION_PORT/health"; then
+    echo "  ${gr}Gemma Vision is up.${r}"
+    if [ "$host" = "192.168.55.1" ]; then
+      echo "  On the Mac (USB-C cable):  ${b}http://192.168.55.1:$VISION_PORT/${r}"
+    else
+      echo "  Loopback only (no USB-C link). On the Mac run:"
+      echo "    ssh -N -L $VISION_PORT:127.0.0.1:$VISION_PORT user@<jetson>   then open http://localhost:$VISION_PORT/"
+    fi
+    echo "  ${dm}The video is live. Each identification takes about 20 to 80 s on this board.${r}"
+    echo "  ${dm}It keeps running after you leave the menu. Stop it with v then x.${r}"
+  else
+    echo "  ${ye}Not answering. Last log lines:${r}"; tail -15 "$VISION_DIR/logs/gemma_vision.log"
+  fi
+}
+
+gemma_vision(){
+  local choice
+  while :; do
+    local pid host; pid=$(vision_pid); host=$(studio_host)
+    echo
+    if [ -n "$pid" ]; then
+      echo "  ${b}Gemma Vision${r}   ${gr}running${r} ${dm}(pid $pid)  http://$host:$VISION_PORT/${r}"
+    else
+      echo "  ${b}Gemma Vision${r}   ${dm}stopped${r}"
+    fi
+    echo "    ${gr}s${r})  Start / restart   ${dm}(stops Sign Studio first, one reader per camera)${r}"
+    echo "    ${gr}x${r})  Stop"
+    echo "    ${gr}l${r})  Show the log"
+    echo "    ${gr}b${r})  Back"
+    printf "\n  ${b}> ${r}"; read -r choice
+    case "$choice" in
+      s|S) vision_start; pause ;;
+      x|X) pkill -f '[g]emma_vision\.py' && echo "  stopped" || echo "  was not running"; pause ;;
+      l|L) tail -30 "$VISION_DIR/logs/gemma_vision.log" 2>/dev/null || echo "  no log yet"; pause ;;
+      b|B|"") return ;;
+      *) echo "Unknown choice: $choice"; sleep 1 ;;
+    esac
+  done
+}
+
+# C920 Sentences: live_prompter.py in the ASL pipeline dir. Serves the 212-sentence pool,
+# records only from the C920 on this board, and writes every clip to the microSD under
+# $PROMPTER_ROOT/<session>/. It binds loopback ONLY (the page controls the camera and
+# has no login), so the Mac reaches it through an SSH tunnel: ./studio.sh prompter start
+# on the Mac does the tunnel and opens the page. Detached, so it outlives the menu.
+PROMPTER_PORT=8095
+PROMPTER_SESSION=pool212
+PROMPTER_ROOT="/home/snowbeach/asl-live"
+
+prompter_pid(){ pgrep -f '[l]ive_prompter\.py' | head -1; }
+prompter_state(){ [ -n "$(prompter_pid)" ] && echo "${gr}[running]${r}" || echo ""; }
+
+prompter_start(){
+  if [ ! -f "$ASL_DIR/live_prompter.py" ]; then
+    echo "live_prompter.py is not in $ASL_DIR. Run ./studio.sh deploy from the Mac."
+    return
+  fi
+  local cam; cam=$(readlink -f /dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920*-video-index0 2>/dev/null | head -1)
+  if [ -z "$cam" ] || [ ! -e "$cam" ]; then
+    echo "  ${ye}No C920 found.${r} Plug it into the Jetson and try again."
+    return
+  fi
+  # never cut off a Sign Studio Record take
+  local phase
+  phase=$(curl -s -m 2 "http://127.0.0.1:$STUDIO_PORT/api/state" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    print((json.load(sys.stdin).get("rec") or {}).get("phase") or "")
+except Exception:
+    print("")')
+  case "$phase" in
+    countdown|recording|review)
+      echo "  ${ye}Sign Studio is mid-take (Record: $phase).${r} Finish or redo it, then start this."
+      return ;;
+  esac
+  "$ASL_DIR/asl_cam.sh" stop >/dev/null 2>&1      # one reader per camera
+  pkill -f '[s]entence_decoder\.py'; pkill -f '[s]ign_studio\.py'
+  pkill -f '[g]emma_vision\.py'; pkill -f '[l]ive_prompter\.py'; sleep 1
+  mkdir -p "$ASL_DIR/logs"
+  ( cd "$ASL_DIR" && setsid python3 live_prompter.py --session "$PROMPTER_SESSION" & ) \
+      </dev/null >"$ASL_DIR/logs/live_prompter.log" 2>&1
+  printf "  starting"
+  local i
+  for i in $(seq 1 20); do
+    curl -sf -m 1 -o /dev/null "http://127.0.0.1:$PROMPTER_PORT/api/state" && break
+    printf "."; sleep 1
+  done
+  echo
+  if curl -sf -m 2 -o /dev/null "http://127.0.0.1:$PROMPTER_PORT/api/state"; then
+    echo "  ${gr}C920 Sentences is up.${r} Session ${b}$PROMPTER_SESSION${r}, clips in $PROMPTER_ROOT/$PROMPTER_SESSION/"
+    echo "  Loopback only. On the Mac, easiest:"
+    echo "    ${b}cd ~/Desktop/Dream/asl-sentence-trainer && ./studio.sh prompter start${r}   ${dm}(tunnel + opens the page)${r}"
+    echo "  or by hand:  ssh -N -L $PROMPTER_PORT:127.0.0.1:$PROMPTER_PORT user@<jetson>   then http://localhost:$PROMPTER_PORT/"
+    echo "  ${dm}It keeps running after you leave the menu. Stop it with c then x.${r}"
+  else
+    echo "  ${ye}Not answering. Last log lines:${r}"; tail -15 "$ASL_DIR/logs/live_prompter.log"
+  fi
+}
+
+c920_sentences(){
+  local choice
+  while :; do
+    local pid; pid=$(prompter_pid)
+    echo
+    if [ -n "$pid" ]; then
+      echo "  ${b}C920 Sentences${r}   ${gr}running${r} ${dm}(pid $pid)  localhost:$PROMPTER_PORT via tunnel${r}"
+    else
+      echo "  ${b}C920 Sentences${r}   ${dm}stopped${r}"
+    fi
+    echo "    ${gr}s${r})  Start / restart   ${dm}(stops Sign Studio and Gemma Vision first, one reader per camera)${r}"
+    echo "    ${gr}x${r})  Stop"
+    echo "    ${gr}l${r})  Show the log and last takes"
+    echo "    ${gr}b${r})  Back"
+    printf "\n  ${b}> ${r}"; read -r choice
+    case "$choice" in
+      s|S) prompter_start; pause ;;
+      x|X) pkill -f '[l]ive_prompter\.py' && echo "  stopped" || echo "  was not running"; pause ;;
+      l|L) tail -30 "$ASL_DIR/logs/live_prompter.log" 2>/dev/null || echo "  no log yet"
+           echo "  --- last takes:"; tail -5 "$PROMPTER_ROOT/$PROMPTER_SESSION/takes.jsonl" 2>/dev/null || echo "  none yet"
+           pause ;;
+      b|B|"") return ;;
+      *) echo "Unknown choice: $choice"; sleep 1 ;;
+    esac
+  done
+}
+
 main(){
   while true; do
     clear 2>/dev/null
@@ -167,6 +416,9 @@ main(){
          # build_index.py now refuses that unless you pass --no-embed.
          python3 "$BRAIN_ROOT/build_index.py" --embed; pause ;;
       8) if [ -f "$BRAIN_ROOT/README.md" ]; then less "$BRAIN_ROOT/README.md"; elif [ -f "$HOME/README.md" ]; then less "$HOME/README.md"; else echo "README not found."; sleep 1; fi ;;
+      9) sign_studio ;;
+      v|V) gemma_vision ;;
+      c|C) c920_sentences ;;
       g|G) langchain_repl; pause ;;
       w|W) web_review ;;
       q|Q|"") clear 2>/dev/null; echo "At the shell. Type ${b}menu${r} to reopen the menu, or ${b}brain${r} to chat."; break ;;

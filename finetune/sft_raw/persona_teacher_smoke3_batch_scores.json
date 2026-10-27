@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "id": "parent_hard_crisis_adjacent_p012",
+      "score": 100,
+      "missing": [],
+      "asserted": [],
+      "mode": "isolated"
+    },
+    {
+      "id": "parent_first_steps_p008",
+      "score": -1,
+      "missing": [],
+      "asserted": [],
+      "mode": "truncated"
+    }
+  ]
+}

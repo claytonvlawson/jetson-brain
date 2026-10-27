@@ -53,6 +53,11 @@ number and go. Quit the menu with `q` to reach a normal shell; type `menu` to re
 The menu never appears for scripted (non-interactive) SSH commands, so deploys and copies
 are unaffected.
 
+Option **9, Sign Studio**, starts the live ASL sentence reader web page (camera controls,
+the 39 signs, practice scoring). It runs in the background until you stop it with 9 then
+x. Open `http://192.168.55.1:8092/` on the Mac over the USB-C cable, or run
+`./studio.sh start` in `~/Desktop/Dream/asl-sentence-trainer` for `http://localhost:8092/`.
+
 ---
 
 ## Capability 1: `brain` - your ThesisVault AI
