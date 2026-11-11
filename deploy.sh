@@ -167,6 +167,23 @@ echo "==> Syncing vault markdown (md only) to ${REMOTE}/vault/ ..."
 # excluded paths, so a Templates/ already on the device stays there. The
 # prune in build_index.py:_JUNK_DIR_NAMES is what actually keeps it out of
 # the index. Both are deliberate; neither is redundant.
+# Count the source vault BEFORE the destructive sync. The zero-file guard below
+# used to run AFTER rsync --delete, so a wrong-but-existing VAULT_SRC (a fresh
+# clone, a synced Downloads folder) wiped the device vault first and only then
+# errored out. Refusing here means nothing is deleted on a bad source.
+if [[ ! -d "${VAULT_SRC}" ]]; then
+  echo "ERROR: VAULT_SRC does not exist: ${VAULT_SRC}" >&2
+  exit 1
+fi
+LOCAL_MD_COUNT="$(find "${VAULT_SRC}" -type f -name '*.md' \
+  -not -path '*/Templates/*' -not -path '*/.git/*' | wc -l | tr -d '[:space:]')"
+if [[ "${LOCAL_MD_COUNT}" -eq 0 ]]; then
+  echo "ERROR: ${VAULT_SRC} contains 0 markdown files." >&2
+  echo "       Refusing to rsync --delete: that would empty the device vault." >&2
+  exit 1
+fi
+echo "    Vault source: ${LOCAL_MD_COUNT} markdown files in ${VAULT_SRC}."
+
 rsync -az --delete --prune-empty-dirs \
   --exclude='_WebCache/' \
   --exclude='_Research/' \

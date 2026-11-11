@@ -40,6 +40,30 @@ else
   python3 -m pip install --user ollama rank_bm25 ddgs beautifulsoup4 requests
 fi
 
+# brain.py hardcodes these three model names (DEFAULT_MODEL, DEEP_MODEL,
+# RERANK_EMBED_MODEL). This script never pulled them, so a fresh install
+# reported success and then failed on the first question -- and built a
+# BM25-only index because the embed model was missing. Pull them here so the
+# failure, if any, happens at install time.
+echo "==> Checking Ollama models ..."
+if ! command -v ollama >/dev/null 2>&1; then
+  echo "ERROR: ollama is not installed or not on PATH." >&2
+  echo "       Install it first: https://ollama.com/download" >&2
+  exit 1
+fi
+for MODEL in llama3.2:3b qwen2.5:7b nomic-embed-text; do
+  if ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "${MODEL}"; then
+    echo "    present: ${MODEL}"
+  else
+    echo "    pulling: ${MODEL}"
+    if ! ollama pull "${MODEL}"; then
+      echo "ERROR: could not pull ${MODEL}." >&2
+      echo "       The brain cannot run without it; fix the pull and re-run." >&2
+      exit 1
+    fi
+  fi
+done
+
 echo "==> Ensuring install directories exist (no sudo; snowbeach owns /mnt/nvme) ..."
 mkdir -p "${VAULT_DIR}" "${INDEX_DIR}"
 
